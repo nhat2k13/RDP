@@ -9,10 +9,14 @@ jobs:
     timeout-minutes: 360
 
     steps:
+      - name: Install Tailscale Repo
+        run: |
+          curl -fsSL https://tailscale.com/install.sh | sh
+
       - name: Install Desktop Environment & RDP
         run: |
           sudo apt-get update
-          sudo apt-get install -y xfce4 xfce4-goodies xrdp tailscale
+          sudo apt-get install -y xfce4 xfce4-goodies xrdp
 
       - name: Create RDP User
         run: |
@@ -36,7 +40,7 @@ jobs:
           
           TS_IP=$(tailscale ip -4)
           if [ -z "$TS_IP" ]; then
-            echo "Kêt nối Tailscale thất bại!"
+            echo "Kết nối Tailscale thất bại!"
             exit 1
           fi
           echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
