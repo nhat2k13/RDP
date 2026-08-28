@@ -11,14 +11,19 @@ jobs:
     steps:
       - name: Configure Vietnam Timezone & Install Desktop Environment
         run: |
-          # 1. Cấu hình múi giờ Việt Nam (Asia/Ho_Chi_Minh) tự động
+          # 1. Giải phóng khóa dpkg/apt bị kẹt
+          sudo killall apt apt-get dpkg 2>/dev/null || true
+          sudo rm -f /var/lib/apt/lists/lock /var/lib/dpkg/lock* /var/cache/apt/archives/lock
+          sudo dpkg --configure -a
+          
+          # 2. Cấu hình múi giờ Việt Nam
           sudo ln -snf /usr/share/zoneinfo/Asia/Ho_Chi_Minh /etc/localtime
           echo "Asia/Ho_Chi_Minh" | sudo tee /etc/timezone
           
-          # 2. Cài đặt Tailscale
+          # 3. Cài đặt Tailscale
           curl -fsSL https://tailscale.com/install.sh | sh
           
-          # 3. Cài đặt XFCE4 & XRDP không bị treo bảng chọn
+          # 4. Cài đặt XFCE4 & XRDP
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y xfce4 xfce4-goodies xrdp tzdata
 
