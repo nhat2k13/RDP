@@ -1,0 +1,56 @@
+name: RDP-Colab-GPU-T4
+
+on:
+  workflow_dispatch:
+
+jobs:
+  secure-rdp:
+    runs-on: self-hosted
+    timeout-minutes: 360
+
+    steps:
+      - name: Install Desktop Environment & RDP
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xfce4 xfce4-goodies xrdp tailscale
+
+      - name: Create RDP User
+        run: |
+          USERNAME="RDP"
+          PASSWORD="Pzkxvu123@"
+          
+          # Tạo user RDP mới
+          sudo id -u $USERNAME &>/dev/null || sudo useradd -m -s /bin/bash $USERNAME
+          echo "$USERNAME:$PASSWORD" | sudo chpasswd
+          sudo usermod -aG sudo $USERNAME
+          
+          # Đặt giao diện mặc định XFCE4
+          echo "startxfce4" | sudo tee /home/$USERNAME/.xsession
+          sudo chown $USERNAME:$USERNAME /home/$USERNAME/.xsession
+          
+          sudo service xrdp restart
+
+      - name: Connect to Tailscale
+        run: |
+          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=colab-gpu-$GITHUB_RUN_ID
+          
+          TS_IP=$(tailscale ip -4)
+          if [ -z "$TS_IP" ]; then
+            echo "Kêt nối Tailscale thất bại!"
+            exit 1
+          fi
+          echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
+
+      - name: Maintain Connection
+        run: |
+          echo -e "\n=========================================="
+          echo "   THÔNG TIN KẾT NỐI RDP COLAB GPU T4"
+          echo "Address  : $TAILSCALE_IP"
+          echo "Username : RDP"
+          echo "Password : Pzkxvu123@"
+          echo "==========================================\n"
+          
+          while true; do
+            echo "[$(date)] RDP Active on Colab GPU T4..."
+            sleep 300
+          done
