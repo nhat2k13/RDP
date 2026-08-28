@@ -9,26 +9,28 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - name: Install Tailscale Repo
+      - name: Configure Vietnam Timezone & Install Desktop Environment
         run: |
+          # 1. Cấu hình múi giờ Việt Nam (Asia/Ho_Chi_Minh) tự động
+          sudo ln -snf /usr/share/zoneinfo/Asia/Ho_Chi_Minh /etc/localtime
+          echo "Asia/Ho_Chi_Minh" | sudo tee /etc/timezone
+          
+          # 2. Cài đặt Tailscale
           curl -fsSL https://tailscale.com/install.sh | sh
-
-      - name: Install Desktop Environment & RDP
-        run: |
+          
+          # 3. Cài đặt XFCE4 & XRDP không bị treo bảng chọn
           sudo apt-get update
-          sudo apt-get install -y xfce4 xfce4-goodies xrdp
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y xfce4 xfce4-goodies xrdp tzdata
 
       - name: Create RDP User
         run: |
           USERNAME="RDP"
           PASSWORD="Pzkxvu123@"
           
-          # Tạo user RDP mới
           sudo id -u $USERNAME &>/dev/null || sudo useradd -m -s /bin/bash $USERNAME
           echo "$USERNAME:$PASSWORD" | sudo chpasswd
           sudo usermod -aG sudo $USERNAME
           
-          # Đặt giao diện mặc định XFCE4
           echo "startxfce4" | sudo tee /home/$USERNAME/.xsession
           sudo chown $USERNAME:$USERNAME /home/$USERNAME/.xsession
           
