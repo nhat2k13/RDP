@@ -38,16 +38,17 @@ jobs:
             wget -q -O win10.qcow2 "https://cloud-images.ubuntu.com/minimal/releases/bionic/release/ubuntu-18.04-minimal-cloudimg-amd64.img"
           fi
 
-          # Thêm -nographic để bỏ hiển thị màn hình GTK gây lỗi
+          # Sửa triệt để: Dùng -display none thay cho -nographic để chạy ngầm không đụng hàng
           sudo qemu-system-x86_64 \
             -cpu qemu64 \
             -smp 2 \
             -m 4096 \
             -hda win10.qcow2 \
-            -nographic \
+            -display none \
             -net nic,model=virtio \
-            -net user,hostfwd=tcp::3389-:3389 \
-            -daemonize
+            -net user,hostfwd=tcp::3389-:3389 > /dev/null 2>&1 &
+            
+          sleep 10
 
       - name: Maintain Connection & Show Info
         run: |
