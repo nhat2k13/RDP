@@ -38,13 +38,13 @@ jobs:
             wget -q -O win10.qcow2 "https://cloud-images.ubuntu.com/minimal/releases/bionic/release/ubuntu-18.04-minimal-cloudimg-amd64.img"
           fi
 
-          # Đã bỏ -enable-kvm để tránh lỗi KVM missing
+          # Thêm -nographic để bỏ hiển thị màn hình GTK gây lỗi
           sudo qemu-system-x86_64 \
             -cpu qemu64 \
             -smp 2 \
             -m 4096 \
             -hda win10.qcow2 \
-            -vga std \
+            -nographic \
             -net nic,model=virtio \
             -net user,hostfwd=tcp::3389-:3389 \
             -daemonize
