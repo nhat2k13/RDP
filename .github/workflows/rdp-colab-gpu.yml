@@ -1,4 +1,3 @@
-
 name: RDP-Colab-GPU-T4
 
 on:
@@ -40,13 +39,15 @@ jobs:
           echo "startxfce4" | sudo tee /home/$USERNAME/.xsession
           sudo chown $USERNAME:$USERNAME /home/$USERNAME/.xsession
           
-          sudo service xrdp restart
+          # Khởi chạy xrdp không qua systemd
+          sudo xrdp-sesman &
+          sudo xrdp &
 
       - name: Connect to Tailscale
         run: |
-          # Bật dịch vụ Tailscale ngầm trước khi kết nối
-          sudo service tailscaled start || sudo systemctl start tailscaled
-          sleep 3
+          # Chạy daemon tailscaled trực tiếp ngầm (bỏ qua systemd/service)
+          sudo tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/var/run/tailscale/tailscaled.sock &
+          sleep 5
           
           sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=colab-gpu-$GITHUB_RUN_ID
           
