@@ -1,0 +1,58 @@
+name: Windows-RDP-Fixed-Password
+
+on:
+  workflow_dispatch:
+
+jobs:
+  windows-rdp:
+    runs-on: self-hosted
+    timeout-minutes: 360
+
+    steps:
+      - name: Install Docker & Tailscale
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y docker.io curl
+          curl -fsSL https://tailscale.com/install.sh | sh
+
+      - name: Connect to Tailscale
+        run: |
+          sudo mkdir -p /dev/net
+          sudo mknod /dev/net/tun c 10 200 2>/dev/null || true
+          sudo chmod 600 /dev/net/tun 2>/dev/null || true
+
+          sudo tailscaled --tun=userspace-networking --state=/var/lib/tailscale/tailscaled.state --socket=/var/run/tailscale/tailscaled.sock &
+          sleep 5
+
+          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=win-colab-$GITHUB_RUN_ID
+
+          TS_IP=$(tailscale ip -4)
+          echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
+
+      - name: Launch Windows Container with Fixed Credentials
+        run: |
+          # Chạy Windows 10 tự động với Tên & Mật khẩu cố định do bạn chọn
+          sudo docker run -d \
+            --name windows \
+            --device=/dev/kvm \
+            -p 3389:3389/tcp \
+            -p 3389:3389/udp \
+            -e USER="RDP" \
+            -e PASS="Pzkxvu123@" \
+            -e VERSION="win10" \
+            --stop-timeout 120 \
+            dockur/windows
+
+      - name: Maintain Connection & Show Info
+        run: |
+          echo -e "\n=========================================="
+          echo "   THÔNG TIN KẾT NỐI WINDOWS RDP"
+          echo "Address  : ${{ env.TAILSCALE_IP }}:3389"
+          echo "Username : RDP"
+          echo "Password : Pzkxvu123@"
+          echo "==========================================\n"
+
+          while true; do
+            echo "[$(date)] Windows RDP Active..."
+            sleep 300
+          done
