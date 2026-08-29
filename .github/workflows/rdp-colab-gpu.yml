@@ -9,15 +9,10 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - name: Install Docker & Tailscale
+      - name: Install Tools & Tailscale
         run: |
           sudo apt-get update
           sudo apt-get install -y docker.io curl
-          
-          # Ép khởi chạy Docker Daemon thủ công (bỏ qua systemd)
-          sudo dockerd > /dev/null 2>&1 &
-          sleep 5 # Đợi 5 giây cho Docker khởi động hoàn tất
-          
           curl -fsSL https://tailscale.com/install.sh | sh
 
       - name: Connect to Tailscale
@@ -36,6 +31,19 @@ jobs:
 
       - name: Launch Windows Container with Fixed Credentials
         run: |
+          # 1. Ép Docker Daemon chạy và chờ đến khi sẵn sàng
+          sudo dockerd --host=unix:///var/run/docker.sock > /dev/null 2>&1 &
+          
+          echo "Đang chờ Docker Daemon khởi động..."
+          for i in {1..15}; do
+            if sudo docker info >/dev/null 2>&1; then
+              echo "Docker đã sẵn sàng!"
+              break
+            fi
+            sleep 2
+          done
+
+          # 2. Chạy Windows Container
           sudo docker run -d \
             --name windows \
             --device=/dev/kvm \
