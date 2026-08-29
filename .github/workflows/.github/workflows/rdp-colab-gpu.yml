@@ -1,0 +1,16 @@
+name: RDP Colab GPU
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: self-hosted
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Script
+        run: |
+          chmod +x aztutools
+          ./aztutools install
