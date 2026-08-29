@@ -13,8 +13,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y docker.io curl
-          # Khởi động dịch vụ Docker bị thiếu ở lượt trước
-          sudo service docker start || sudo systemctl start docker
+          
+          # Ép khởi chạy Docker Daemon thủ công (bỏ qua systemd)
+          sudo dockerd > /dev/null 2>&1 &
+          sleep 5 # Đợi 5 giây cho Docker khởi động hoàn tất
+          
           curl -fsSL https://tailscale.com/install.sh | sh
 
       - name: Connect to Tailscale
