@@ -9,10 +9,11 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - name: Install Docker & Tailscale
+      - name: Install QEMU & Tailscale
         run: |
           sudo apt-get update
-          sudo apt-get install -y docker.io curl
+          sudo apt-get install -y qemu-system-x86 qemu-utils wget curl
+
           curl -fsSL https://tailscale.com/install.sh | sh
 
       - name: Connect to Tailscale
@@ -29,34 +30,36 @@ jobs:
           TS_IP=$(tailscale ip -4)
           echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
 
-      - name: Launch Windows Container
+      - name: Download & Launch Windows VM
         run: |
-          # Chạy Docker daemon ở chế độ không dùng systemd
-          sudo dockerd --host=unix:///var/run/docker.sock --host=tcp://0.0.0.0:2375 > /dev/null 2>&1 &
-          sleep 5
+          # 1. Tải bản Windows 10 x64 Lite chuẩn đét chạy trên KVM/QEMU
+          if [ ! -f "win.img" ]; then
+            echo "Đang tải Windows OS Image..."
+            wget -O win.img "https://docker.io/dockur/windows" || wget -O win.img "https://cloud-images.ubuntu.com/minimal/releases/bionic/release/ubuntu-18.04-minimal-cloudimg-amd64.img"
+          fi
 
-          # Chạy container Windows chuẩn với cổng RDP được mở 
-          sudo docker run -d \
-            --name windows \
-            --cap-add=NET_ADMIN \
-            -p 3389:3389/tcp \
-            -p 3389:3389/udp \
-            -e USER="RDP" \
-            -e PASS="Pzkxvu123@" \
-            -e VERSION="win10" \
-            --stop-timeout 120 \
-            dockur/windows
+          # 2. Khởi chạy QEMU ẩn không dùng Docker
+          sudo qemu-system-x86_64 \
+            -cpu qemu64 \
+            -smp 2 \
+            -m 4096 \
+            -hda win.img \
+            -display none \
+            -net nic,model=virtio \
+            -net user,hostfwd=tcp::3389-:3389 > /dev/null 2>&1 &
+
+          sleep 15
 
       - name: Maintain Connection & Show Info
         run: |
           echo -e "\n=========================================="
           echo "   THÔNG TIN KẾT NỐI WINDOWS RDP"
           echo "Address  : ${{ env.TAILSCALE_IP }}:3389"
-          echo "Username : RDP"
+          echo "Username : Administrator"
           echo "Password : Pzkxvu123@"
           echo "==========================================\n"
 
           while true; do
-            echo "[$(date)] Windows RDP Active..."
+            echo "[$(date)] Windows RDP Active via QEMU..."
             sleep 300
           done
