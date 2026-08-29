@@ -13,6 +13,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y docker.io curl
+          # Khởi động dịch vụ Docker bị thiếu ở lượt trước
+          sudo service docker start || sudo systemctl start docker
           curl -fsSL https://tailscale.com/install.sh | sh
 
       - name: Connect to Tailscale
@@ -31,7 +33,6 @@ jobs:
 
       - name: Launch Windows Container with Fixed Credentials
         run: |
-          # Chạy Windows 10 tự động với Tên & Mật khẩu cố định do bạn chọn
           sudo docker run -d \
             --name windows \
             --device=/dev/kvm \
