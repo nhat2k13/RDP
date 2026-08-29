@@ -1,65 +1,76 @@
-name: Windows-RDP-Fixed-Password
+name: RDP-Colab-GPU-T4
 
 on:
   workflow_dispatch:
 
 jobs:
-  windows-rdp:
+  secure-rdp:
     runs-on: self-hosted
     timeout-minutes: 360
 
     steps:
-      - name: Install QEMU & Tailscale
+      - name: Configure Vietnam Timezone & Install Desktop Environment
         run: |
-          sudo apt-get update
-          sudo apt-get install -y qemu-system-x86 qemu-utils wget curl
-
+          # 1. Giải phóng khóa dpkg/apt bị kẹt
+          sudo killall apt apt-get dpkg 2>/dev/null || true
+          sudo rm -f /var/lib/apt/lists/lock /var/lib/dpkg/lock* /var/cache/apt/archives/lock
+          sudo dpkg --configure -a
+          
+          # 2. Cấu hình múi giờ Việt Nam
+          sudo ln -snf /usr/share/zoneinfo/Asia/Ho_Chi_Minh /etc/localtime
+          echo "Asia/Ho_Chi_Minh" | sudo tee /etc/timezone
+          
+          # 3. Cài đặt Tailscale
           curl -fsSL https://tailscale.com/install.sh | sh
+          
+          # 4. Cài đặt XFCE4 & XRDP
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y xfce4 xfce4-goodies xrdp tzdata
+
+      - name: Create RDP User
+        run: |
+          USERNAME="RDP"
+          Password="Pzkxvu123@"
+          
+          sudo id -u $USERNAME &>/dev/null || sudo useradd -m -s /bin/bash $USERNAME
+          echo "$USERNAME:$Password" | sudo chpasswd
+          sudo usermod -aG sudo $USERNAME
+          
+          echo "startxfce4" | sudo tee /home/$USERNAME/.xsession
+          sudo chown $USERNAME:$USERNAME /home/$USERNAME/.xsession
+          
+          sudo xrdp-sesman &
+          sudo xrdp &
 
       - name: Connect to Tailscale
         run: |
+          # Tạo thư mục và thiết bị tun (nếu thiếu) + Chạy Tailscale ở chế độ userspace
           sudo mkdir -p /dev/net
           sudo mknod /dev/net/tun c 10 200 2>/dev/null || true
           sudo chmod 600 /dev/net/tun 2>/dev/null || true
-
+          
           sudo tailscaled --tun=userspace-networking --state=/var/lib/tailscale/tailscaled.state --socket=/var/run/tailscale/tailscaled.sock &
           sleep 5
-
-          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=win-colab-$GITHUB_RUN_ID
-
+          
+          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=colab-gpu-$GITHUB_RUN_ID
+          
           TS_IP=$(tailscale ip -4)
+          if [ -z "$TS_IP" ]; then
+            echo "Kết nối Tailscale thất bại!"
+            exit 1
+          fi
           echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
 
-      - name: Download & Launch Windows VM
-        run: |
-          # 1. Tải bản Windows 10 x64 Lite chuẩn đét chạy trên KVM/QEMU
-          if [ ! -f "win.img" ]; then
-            echo "Đang tải Windows OS Image..."
-            wget -O win.img "https://docker.io/dockur/windows" || wget -O win.img "https://cloud-images.ubuntu.com/minimal/releases/bionic/release/ubuntu-18.04-minimal-cloudimg-amd64.img"
-          fi
-
-          # 2. Khởi chạy QEMU ẩn không dùng Docker
-          sudo qemu-system-x86_64 \
-            -cpu qemu64 \
-            -smp 2 \
-            -m 4096 \
-            -hda win.img \
-            -display none \
-            -net nic,model=virtio \
-            -net user,hostfwd=tcp::3389-:3389 > /dev/null 2>&1 &
-
-          sleep 15
-
-      - name: Maintain Connection & Show Info
+      - name: Maintain Connection
         run: |
           echo -e "\n=========================================="
-          echo "   THÔNG TIN KẾT NỐI WINDOWS RDP"
-          echo "Address  : ${{ env.TAILSCALE_IP }}:3389"
-          echo "Username : Administrator"
+          echo "   THÔNG TIN KẾT NỐI RDP COLAB GPU T4"
+          echo "Address  : $TAILSCALE_IP"
+          echo "Username : RDP"
           echo "Password : Pzkxvu123@"
           echo "==========================================\n"
-
+          
           while true; do
-            echo "[$(date)] Windows RDP Active via QEMU..."
+            echo "[$(date)] RDP Active on Colab GPU T4..."
             sleep 300
           done
