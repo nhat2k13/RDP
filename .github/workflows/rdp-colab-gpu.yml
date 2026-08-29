@@ -9,7 +9,7 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - name: Configure Vietnam Timezone & Install Desktop Environment
+      - name: Configure Vietnam Timezone & Install Desktop Environment + Apps
         run: |
           # 1. Giải phóng khóa dpkg/apt bị kẹt
           sudo killall apt apt-get dpkg 2>/dev/null || true
@@ -23,9 +23,19 @@ jobs:
           # 3. Cài đặt Tailscale
           curl -fsSL https://tailscale.com/install.sh | sh
           
-          # 4. Cài đặt XFCE4 & XRDP
+          # 4. Cài đặt XFCE4, XRDP, wget & curl
           sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y xfce4 xfce4-goodies xrdp tzdata
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y xfce4 xfce4-goodies xrdp tzdata wget curl
+          
+          # 5. Cài đặt Google Chrome
+          wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ./google-chrome-stable_current_amd64.deb
+          rm google-chrome-stable_current_amd64.deb
+
+          # 6. Cài đặt Steam (Bật kiến trúc 32-bit & cài steam-installer)
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y steam
 
       - name: Create RDP User
         run: |
@@ -64,7 +74,7 @@ jobs:
       - name: Maintain Connection
         run: |
           echo -e "\n=========================================="
-          echo "   THÔNG TIN KẾT NỐI RDP COLAB GPU T4"
+          echo "    THÔNG TIN KẾT NỐI RDP COLAB GPU T4"
           echo "Address  : $TAILSCALE_IP"
           echo "Username : RDP"
           echo "Password : Pzkxvu123@"
