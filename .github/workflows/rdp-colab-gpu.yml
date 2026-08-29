@@ -14,5 +14,6 @@ jobs:
         run: |
           chmod +x aztutools
           ./aztutools install
+          sleep 15
           ./aztutools start
           sleep infinity
