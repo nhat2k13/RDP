@@ -1,76 +1,58 @@
-name: RDP-Colab-GPU-T4
+name: Windows-RDP-Fixed-Password
 
 on:
   workflow_dispatch:
 
 jobs:
-  secure-rdp:
+  windows-rdp:
     runs-on: self-hosted
     timeout-minutes: 360
 
     steps:
-      - name: Configure Vietnam Timezone & Install Desktop Environment
+      - name: Install Docker & Tailscale
         run: |
-          # 1. Giải phóng khóa dpkg/apt bị kẹt
-          sudo killall apt apt-get dpkg 2>/dev/null || true
-          sudo rm -f /var/lib/apt/lists/lock /var/lib/dpkg/lock* /var/cache/apt/archives/lock
-          sudo dpkg --configure -a
-          
-          # 2. Cấu hình múi giờ Việt Nam
-          sudo ln -snf /usr/share/zoneinfo/Asia/Ho_Chi_Minh /etc/localtime
-          echo "Asia/Ho_Chi_Minh" | sudo tee /etc/timezone
-          
-          # 3. Cài đặt Tailscale
-          curl -fsSL https://tailscale.com/install.sh | sh
-          
-          # 4. Cài đặt XFCE4 & XRDP
           sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y xfce4 xfce4-goodies xrdp tzdata
-
-      - name: Create RDP User
-        run: |
-          USERNAME="RDP"
-          Password="Pzkxvu123@"
-          
-          sudo id -u $USERNAME &>/dev/null || sudo useradd -m -s /bin/bash $USERNAME
-          echo "$USERNAME:$Password" | sudo chpasswd
-          sudo usermod -aG sudo $USERNAME
-          
-          echo "startxfce4" | sudo tee /home/$USERNAME/.xsession
-          sudo chown $USERNAME:$USERNAME /home/$USERNAME/.xsession
-          
-          sudo xrdp-sesman &
-          sudo xrdp &
+          sudo apt-get install -y docker.io curl
+          curl -fsSL https://tailscale.com/install.sh | sh
 
       - name: Connect to Tailscale
         run: |
-          # Tạo thư mục và thiết bị tun (nếu thiếu) + Chạy Tailscale ở chế độ userspace
           sudo mkdir -p /dev/net
           sudo mknod /dev/net/tun c 10 200 2>/dev/null || true
           sudo chmod 600 /dev/net/tun 2>/dev/null || true
-          
+
           sudo tailscaled --tun=userspace-networking --state=/var/lib/tailscale/tailscaled.state --socket=/var/run/tailscale/tailscaled.sock &
           sleep 5
-          
-          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=colab-gpu-$GITHUB_RUN_ID
-          
+
+          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=win-colab-$GITHUB_RUN_ID
+
           TS_IP=$(tailscale ip -4)
-          if [ -z "$TS_IP" ]; then
-            echo "Kết nối Tailscale thất bại!"
-            exit 1
-          fi
           echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
 
-      - name: Maintain Connection
+      - name: Launch Windows Container with Fixed Credentials
+        run: |
+          # Chạy Windows 10 tự động với Tên & Mật khẩu cố định do bạn chọn
+          sudo docker run -d \
+            --name windows \
+            --device=/dev/kvm \
+            -p 3389:3389/tcp \
+            -p 3389:3389/udp \
+            -e USER="RDP" \
+            -e PASS="Pzkxvu123@" \
+            -e VERSION="win10" \
+            --stop-timeout 120 \
+            dockur/windows
+
+      - name: Maintain Connection & Show Info
         run: |
           echo -e "\n=========================================="
-          echo "   THÔNG TIN KẾT NỐI RDP COLAB GPU T4"
-          echo "Address  : $TAILSCALE_IP"
+          echo "   THÔNG TIN KẾT NỐI WINDOWS RDP"
+          echo "Address  : ${{ env.TAILSCALE_IP }}:3389"
           echo "Username : RDP"
           echo "Password : Pzkxvu123@"
           echo "==========================================\n"
-          
+
           while true; do
-            echo "[$(date)] RDP Active on Colab GPU T4..."
+            echo "[$(date)] Windows RDP Active..."
             sleep 300
           done
