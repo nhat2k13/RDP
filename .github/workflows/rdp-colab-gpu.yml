@@ -13,5 +13,6 @@ jobs:
       - name: Run VPS Script
         run: |
           chmod +x aztutools
+          ./aztutools install
           ./aztutools start
           sleep infinity
