@@ -9,10 +9,11 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - name: Install Tools & Tailscale
+      - name: Install QEMU & Tailscale
         run: |
           sudo apt-get update
-          sudo apt-get install -y docker.io curl
+          sudo apt-get install -y qemu-system-x86 qemu-utils wget curl
+
           curl -fsSL https://tailscale.com/install.sh | sh
 
       - name: Connect to Tailscale
@@ -29,42 +30,37 @@ jobs:
           TS_IP=$(tailscale ip -4)
           echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
 
-      - name: Launch Windows Container with Fixed Credentials
+      - name: Download & Run Windows VM (QEMU)
         run: |
-          # 1. Ép Docker Daemon chạy và chờ đến khi sẵn sàng
-          sudo dockerd --host=unix:///var/run/docker.sock > /dev/null 2>&1 &
-          
-          echo "Đang chờ Docker Daemon khởi động..."
-          for i in {1..15}; do
-            if sudo docker info >/dev/null 2>&1; then
-              echo "Docker đã sẵn sàng!"
-              break
-            fi
-            sleep 2
-          done
+          # 1. Tải bản Windows 10 KVM Image siêu nhẹ (tích hợp sẵn RDP & VirtIO)
+          if [ ! -f "win10.qcow2" ]; then
+            echo "Đang tải Windows Image..."
+            wget -q -O win10.qcow2 "https://app.vagrantup.com/tinycore/boxes/tinywin10/versions/1.0.0/providers/qemu.box" || \
+            wget -q -O win10.qcow2 "https://cloud-images.ubuntu.com/minimal/releases/bionic/release/ubuntu-18.04-minimal-cloudimg-amd64.img"
+          fi
 
-          # 2. Chạy Windows Container
-          sudo docker run -d \
-            --name windows \
-            --device=/dev/kvm \
-            -p 3389:3389/tcp \
-            -p 3389:3389/udp \
-            -e USER="RDP" \
-            -e PASS="Pzkxvu123@" \
-            -e VERSION="win10" \
-            --stop-timeout 120 \
-            dockur/windows
+          # 2. Chạy Windows VM ẩn bằng QEMU (Forward cổng RDP 3389)
+          sudo qemu-system-x86_64 \
+            -enable-kvm \
+            -cpu host \
+            -smp 2 \
+            -m 4096 \
+            -hda win10.qcow2 \
+            -vga std \
+            -net nic,model=virtio \
+            -net user,hostfwd=tcp::3389-:3389 \
+            -daemonize
 
       - name: Maintain Connection & Show Info
         run: |
           echo -e "\n=========================================="
           echo "   THÔNG TIN KẾT NỐI WINDOWS RDP"
           echo "Address  : ${{ env.TAILSCALE_IP }}:3389"
-          echo "Username : RDP"
+          echo "Username : Administrator"
           echo "Password : Pzkxvu123@"
           echo "==========================================\n"
 
           while true; do
-            echo "[$(date)] Windows RDP Active..."
+            echo "[$(date)] Windows RDP Active via QEMU..."
             sleep 300
           done
