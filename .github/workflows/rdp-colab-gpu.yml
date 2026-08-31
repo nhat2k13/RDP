@@ -9,59 +9,47 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - name: Khởi động Windows RDP
+      - name: Khai tử tiến trình cũ & Khởi chạy Windows
         run: |
-          # 1. Dọn dẹp & Cài đặt công cụ
-          sudo killall -9 qemu-system-x86_64 apt apt-get dpkg 2>/dev/null || true
+          # 1. Dọn dẹp hệ thống
+          sudo killall -9 qemu-system-x86_64 dockerd tailscaled apt apt-get dpkg 2>/dev/null || true
           sudo rm -f /var/lib/apt/lists/lock /var/lib/dpkg/lock* /var/cache/apt/archives/lock
           sudo dpkg --configure -a
 
+          # 2. Cài Docker & Tailscale
           sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y qemu-system-x86 qemu-utils wget curl
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io curl
 
-          # 2. Cài đặt và Bật Tailscale
           curl -fsSL https://tailscale.com/install.sh | sh
           sudo mkdir -p /dev/net
           sudo mknod /dev/net/tun c 10 200 2>/dev/null || true
           sudo chmod 600 /dev/net/tun 2>/dev/null || true
 
-          sudo killall tailscaled 2>/dev/null || true
-          sleep 2
+          # 3. Chạy Tailscale
           sudo tailscaled --tun=userspace-networking --state=/var/lib/tailscale/tailscaled.state --socket=/var/run/tailscale/tailscaled.sock &
-          sleep 5
-
+          sleep 4
           sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=colab-win-$GITHUB_RUN_ID
 
           TS_IP=$(tailscale ip -4)
+
+          # 4. Chạy Docker Daemon ngầm
+          sudo dockerd > /dev/null 2>&1 &
+          sleep 5
+
           echo -e "\n=========================================="
-          echo "   THÔNG TIN KẾT NỐI WINDOWS RDP"
-          echo "Address  : $TS_IP:3389"
-          echo "Username : Administrator"
-          echo "Password : Pzkxvu123@"
+          echo "   KẾT NỐI WINDOWS BẰNG TRÌNH DUYỆT WEB"
+          echo "Địa chỉ URL : http://$TS_IP:8006"
           echo "==========================================\n"
 
-          # 3. Tải đĩa Windows Lite
-          mkdir -p ~/windows
-          cd ~/windows
-          if [ ! -f "win10.qcow2" ]; then
-            echo "Đang tải file đĩa Windows..."
-            wget -O win10.qcow2 "https://archive.org/download/win10_qcow2_rdp/win10.qcow2"
-          fi
+          # 5. Khởi chạy Windows Container (Đã bỏ KVM bắt buộc)
+          sudo docker run -d \
+            --name windows \
+            -p 8006:8006 \
+            -e RAM_SIZE="4G" \
+            -e CPU_CORES="2" \
+            dockur/windows
 
-          # 4. Khai tử tiến trình cũ và chạy QEMU cú pháp chuẩn tuyệt đối
-          sudo killall -9 qemu-system-x86_64 2>/dev/null || true
-          sleep 2
-
-          sudo qemu-system-x86_64 \
-            -m 8192 \
-            -smp cores=4 \
-            -hda /root/windows/win10.qcow2 \
-            -net nic,model=virtio \
-            -net user,hostfwd=tcp::3389-:3389 \
-            -nographic &
-
-          # 5. Duy trì kết nối
           while true; do
-            echo "[$(date)] Máy ảo Windows đang chạy trên Colab..."
+            echo "[$(date)] Máy ảo Windows đang chạy tại http://$TS_IP:8006..."
             sleep 300
           done
