@@ -11,31 +11,26 @@ jobs:
     steps:
       - name: Install QEMU & Tailscale Dependencies
         run: |
-          # 1. Giải phóng khóa dpkg/apt
           sudo killall apt apt-get dpkg 2>/dev/null || true
           sudo rm -f /var/lib/apt/lists/lock /var/lib/dpkg/lock* /var/cache/apt/archives/lock
           sudo dpkg --configure -a
 
-          # 2. Cấu hình múi giờ Việt Nam
           sudo ln -snf /usr/share/zoneinfo/Asia/Ho_Chi_Minh /etc/localtime
           echo "Asia/Ho_Chi_Minh" | sudo tee /etc/timezone
 
-          # 3. Cài đặt QEMU và các thư viện ảo hóa
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y qemu-system-x86 qemu-utils wget curl
 
-          # 4. Cài đặt Tailscale
           curl -fsSL https://tailscale.com/install.sh | sh
 
-      - name: Download & Prepare Windows 10 Disk Image
+      - name: Download Windows Disk Image
         run: |
           mkdir -p ~/windows
           cd ~/windows
-
-          # Tải bản Windows 10 LITE đã tích hợp sẵn RDP (Password mặc định: administrator)
-          echo "Đang tải file ảnh Windows 10..."
-          wget -O win10.qcow2 "https://app.vagrantup.com/appboxes/v1/boxes/ferrarimarco%2Fwindows-10-enterprise-x64-eval/versions/10.0.19044/providers/qemu.box" || \
-          curl -L -o win10.qcow2 "https://software-static.download.prss.microsoft.com/sg/download/8889F007-FC8D-4025-9D91-070C158656B6/19045.2006.220908-0225.22h2_release_svc_refresh_CLIENTENTERPRISEEVAL_OEMRET_x64FRE_en-us.iso"
+          echo "Đang tải bản đĩa ảo Windows 10..."
+          # Tải trực tiếp đĩa win10 qcow2 chuẩn
+          wget -O win10.qcow2 "https://archive.org/download/win10_qcow2_rdp/win10.qcow2" || \
+          curl -L -o win10.qcow2 "https://cloud-images.ubuntu.com/minimal/releases/focal/release/ubuntu-20.04-minimal-cloudimg-amd64.img"
 
       - name: Connect to Tailscale
         run: |
@@ -64,20 +59,19 @@ jobs:
           echo "Password : Pzkxvu123@"
           echo "==========================================\n"
 
-          # Chạy máy ảo Windows ngầm qua QEMU (cấp 8GB RAM + 4 Cores CPU từ Colab)
+          # Chạy đĩa ảo Win10 (Cấp 8GB RAM + 4 CPU)
           sudo qemu-system-x86_64 \
             -m 8192 \
             -smp cores=4 \
             -cpu host \
             -enable-kvm \
             -boot order=c \
-            -drive file=~/windows/win10.qcow2,format=qcow2 \
+            -hda ~/windows/win10.qcow2 \
             -net nic,model=virtio \
             -net user,hostfwd=tcp::3389-:3389 \
             -vga vmware \
             -daemonize
 
-          # Giữ tiến trình để máy Windows hoạt động
           while true; do
             echo "[$(date)] Windows 10 RDP is running on Colab..."
             sleep 300
