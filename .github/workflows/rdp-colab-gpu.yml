@@ -9,15 +9,449 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - name: Test workflow
+
+      # =========================================================
+      # 1. CÀI QEMU VÀ CÔNG CỤ
+      # =========================================================
+      - name: Install QEMU and tools
         shell: bash
         run: |
-          echo "Workflow OK"
+          set -e
+
+          sudo dpkg --configure -a || true
+          sudo apt-get update
+
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            qemu-system-x86 \
+            qemu-utils \
+            ovmf \
+            xorriso \
+            wimtools \
+            curl \
+            wget \
+            python3 \
+            ca-certificates \
+            grep \
+            sed
+
+      # =========================================================
+      # 2. KIỂM TRA KVM
+      # =========================================================
+      - name: Check KVM
+        shell: bash
+        run: |
+          if [ -e /dev/kvm ]; then
+            echo "KVM OK"
+          else
+            echo "WARNING: /dev/kvm không tồn tại."
+            echo "QEMU sẽ dùng software emulation và có thể rất chậm."
+          fi
+
+      # =========================================================
+      # 3. CÀI + KẾT NỐI TAILSCALE
+      # =========================================================
+      - name: Install and connect Tailscale
+        shell: bash
+        run: |
+          set -e
+
+          if ! command -v tailscale >/dev/null 2>&1; then
+            curl -fsSL https://tailscale.com/install.sh | sh
+          fi
+
+          if ! pgrep -x tailscaled >/dev/null 2>&1; then
+            sudo mkdir -p /dev/net
+
+            if [ ! -e /dev/net/tun ]; then
+              sudo mknod /dev/net/tun c 10 200 || true
+            fi
+
+            sudo chmod 600 /dev/net/tun || true
+
+            sudo tailscaled \
+              --tun=userspace-networking \
+              --state=/var/lib/tailscale/tailscaled.state \
+              --socket=/var/run/tailscale/tailscaled.sock &
+
+            sleep 5
+          else
+            echo "tailscaled đã chạy."
+          fi
+
+          sudo tailscale up \
+            --authkey="${{ secrets.TAILSCALE_AUTH_KEY }}" \
+            --hostname="windows10-$GITHUB_RUN_ID"
+
+          TS_IP=$(sudo tailscale ip -4)
+
+          if [ -z "$TS_IP" ]; then
+            echo "Không lấy được Tailscale IP."
+            exit 1
+          fi
+
+          echo "TS_IP=$TS_IP" >> "$GITHUB_ENV"
+
+          echo "Tailscale IP: $TS_IP"
+
+      # =========================================================
+      # 4. CHUẨN BỊ THƯ MỤC VM
+      # =========================================================
+      - name: Prepare VM directory
+        shell: bash
+        run: |
+          set -e
+
+          rm -rf "$HOME/windows-vm"
+          mkdir -p "$HOME/windows-vm"
+
+          echo "VM directory: $HOME/windows-vm"
+
+      # =========================================================
+      # 5. TỰ LẤY LINK ISO WINDOWS 10 TỪ MICROSOFT
+      #
+      # Không cần WINDOWS_ISO_URL
+      # =========================================================
+      - name: Get fresh Windows 10 ISO URL
+        shell: bash
+        run: |
           set -e
 
           cd "$HOME/windows-vm"
 
-          export IMAGE_INDEX="$IMAGE_INDEX"
+          PAGE_URL="https://www.microsoft.com/en-us/software-download/windows10ISO"
+
+          USER_AGENT="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36"
+
+          SESSION_ID=$(python3 - <<'PY'
+          import uuid
+          print(uuid.uuid4())
+          PY
+          )
+
+          echo "Downloading Microsoft Windows 10 ISO page..."
+
+          curl \
+            -L \
+            --fail \
+            --silent \
+            --show-error \
+            -A "$USER_AGENT" \
+            -c microsoft.cookies \
+            -b microsoft.cookies \
+            "$PAGE_URL" \
+            -o microsoft-page.html
+
+          if [ ! -s microsoft-page.html ]; then
+            echo "Không lấy được trang Microsoft."
+            exit 1
+          fi
+
+          # -----------------------------------------------------
+          # Lấy productEditionId từ HTML
+          # -----------------------------------------------------
+          PRODUCT_EDITION_ID=$(
+            python3 - <<'PY'
+          import re
+
+          data = open("microsoft-page.html", "r", encoding="utf-8", errors="ignore").read()
+
+          patterns = [
+              r'<option[^>]+value="(\d+)"[^>]*>\s*Windows 10',
+              r'productEditionId["\']?\s*[:=]\s*["\']?(\d+)',
+              r'ProductEditionId["\']?\s*[:=]\s*["\']?(\d+)'
+          ]
+
+          for pattern in patterns:
+              m = re.search(pattern, data, re.I)
+              if m:
+                  print(m.group(1))
+                  break
+          PY
+          )
+
+          if [ -z "$PRODUCT_EDITION_ID" ]; then
+            echo "Không tìm được productEditionId từ Microsoft."
+            exit 1
+          fi
+
+          echo "Product edition ID: $PRODUCT_EDITION_ID"
+
+          # -----------------------------------------------------
+          # Microsoft endpoint để lấy các SKU ngôn ngữ
+          # -----------------------------------------------------
+          SKU_PAGE_ID="a8f8f489-4c7f-463a-9ca6-5cff94d8d041"
+
+          SKU_API="https://www.microsoft.com/en-us/api/controls/contentinclude/html?pageId=${SKU_PAGE_ID}&host=www.microsoft.com&segments=software-download,Windows10ISO&query=&action=getskuinformationbyproductedition&sessionId=${SESSION_ID}&productEditionId=${PRODUCT_EDITION_ID}&sdVersion=2"
+
+          echo "Requesting English SKU..."
+
+          curl \
+            -L \
+            --fail \
+            --silent \
+            --show-error \
+            -A "$USER_AGENT" \
+            -e "$PAGE_URL" \
+            -c microsoft.cookies \
+            -b microsoft.cookies \
+            "$SKU_API" \
+            -o sku-response.html
+
+          if [ ! -s sku-response.html ]; then
+            echo "Microsoft không trả về SKU."
+            exit 1
+          fi
+
+          # -----------------------------------------------------
+          # Lấy SKU English
+          # -----------------------------------------------------
+          SKU_ID=$(
+            python3 - <<'PY'
+          import re
+          import html
+          import json
+
+          data = open("sku-response.html", "r", encoding="utf-8", errors="ignore").read()
+          data = html.unescape(data)
+
+          # dạng JSON/option phổ biến của Microsoft
+          patterns = [
+              r'"id"\s*:\s*"?(\\?\d+)"?.*?"language"\s*:\s*"English"',
+              r'"id"\s*:\s*(\d+).*?"language"\s*:\s*"English"',
+              r'value="\{&quot;id&quot;:&quot;(\d+)&quot;,\s*&quot;language&quot;:&quot;English'
+          ]
+
+          for pattern in patterns:
+              m = re.search(pattern, data, re.I | re.S)
+              if m:
+                  print(m.group(1).replace("\\", ""))
+                  break
+
+          if not locals().get("m"):
+              # fallback: option có chữ English
+              m2 = re.search(
+                  r'<option[^>]+value=".*?(\d+).*?"[^>]*>\s*English\s*</option>',
+                  data,
+                  re.I | re.S
+              )
+              if m2:
+                  print(m2.group(1))
+          PY
+          )
+
+          if [ -z "$SKU_ID" ]; then
+            echo "Không tìm được SKU English."
+            echo "Phản hồi Microsoft:"
+            sed -n '1,120p' sku-response.html
+            exit 1
+          fi
+
+          echo "English SKU: $SKU_ID"
+
+          # -----------------------------------------------------
+          # Lấy link download
+          # -----------------------------------------------------
+          DOWNLOAD_PAGE_ID="cfa9e580-a81e-4a4b-a846-7b21bf4e2e5b"
+
+          LINKS_API="https://www.microsoft.com/en-us/api/controls/contentinclude/html?pageId=${DOWNLOAD_PAGE_ID}&host=www.microsoft.com&segments=software-download,Windows10ISO&query=&action=GetProductDownloadLinksBySku&sessionId=${SESSION_ID}&skuId=${SKU_ID}&language=English&sdVersion=2"
+
+          echo "Requesting fresh ISO links..."
+
+          curl \
+            -L \
+            --fail \
+            --silent \
+            --show-error \
+            -A "$USER_AGENT" \
+            -e "$PAGE_URL" \
+            -c microsoft.cookies \
+            -b microsoft.cookies \
+            "$LINKS_API" \
+            -o download-links.html
+
+          if [ ! -s download-links.html ]; then
+            echo "Microsoft không trả về download link."
+            exit 1
+          fi
+
+          # -----------------------------------------------------
+          # Lấy URL ISO x64
+          # -----------------------------------------------------
+          ISO_URL=$(
+            python3 - <<'PY'
+          import re
+          import html
+
+          data = open("download-links.html", "r", encoding="utf-8", errors="ignore").read()
+          data = html.unescape(data)
+
+          patterns = [
+              r'href="(https://[^"]+)"[^>]*>\s*<span[^>]*class="product-download-type"[^>]*>\s*IsoX64',
+              r'href="(https://[^"]+)"[^>]*>.*?IsoX64',
+              r'(https://[^"\']+\.iso[^"\']*)'
+          ]
+
+          for pattern in patterns:
+              m = re.search(pattern, data, re.I | re.S)
+              if m:
+                  url = m.group(1).replace("&amp;", "&")
+                  print(url)
+                  break
+          PY
+          )
+
+          if [ -z "$ISO_URL" ]; then
+            echo "Không tìm được URL ISO x64."
+            echo "Phản hồi Microsoft:"
+            sed -n '1,160p' download-links.html
+            exit 1
+          fi
+
+          case "$ISO_URL" in
+            https://*)
+              ;;
+            *)
+              echo "URL ISO không phải HTTPS."
+              exit 1
+              ;;
+          esac
+
+          echo "Đã lấy được link ISO Microsoft."
+          echo "WINDOWS_ISO_URL=$ISO_URL" >> "$GITHUB_ENV"
+
+      # =========================================================
+      # 6. TẢI ISO
+      # =========================================================
+      - name: Download Windows 10 ISO
+        shell: bash
+        run: |
+          set -e
+
+          cd "$HOME/windows-vm"
+
+          echo "Downloading Windows 10 ISO..."
+
+          curl \
+            -L \
+            --fail \
+            --retry 3 \
+            --retry-delay 5 \
+            --progress-bar \
+            -o windows.iso \
+            "$WINDOWS_ISO_URL"
+
+          if [ ! -s windows.iso ]; then
+            echo "ISO download thất bại."
+            exit 1
+          fi
+
+          echo "ISO:"
+          ls -lh windows.iso
+
+      # =========================================================
+      # 7. KIỂM TRA ISO
+      # =========================================================
+      - name: Verify ISO file
+        shell: bash
+        run: |
+          set -e
+
+          cd "$HOME/windows-vm"
+
+          SIZE=$(stat -c%s windows.iso)
+
+          echo "ISO size: $SIZE bytes"
+
+          # ISO Windows phải lớn hơn 3 GB
+          if [ "$SIZE" -lt 3000000000 ]; then
+            echo "File tải về quá nhỏ, có thể không phải ISO Windows."
+            exit 1
+          fi
+
+          SHA256=$(sha256sum windows.iso | awk '{print $1}')
+
+          echo "ISO SHA256:"
+          echo "$SHA256"
+
+      # =========================================================
+      # 8. KIỂM TRA IMAGE WINDOWS
+      # =========================================================
+      - name: Detect Windows image
+        shell: bash
+        run: |
+          set -e
+
+          cd "$HOME/windows-vm"
+
+          sudo mkdir -p /mnt/windows-iso
+
+          sudo mount -o loop,ro windows.iso /mnt/windows-iso
+
+          if [ -f /mnt/windows-iso/sources/install.wim ]; then
+            IMAGE_FILE="/mnt/windows-iso/sources/install.wim"
+
+          elif [ -f /mnt/windows-iso/sources/install.esd ]; then
+            IMAGE_FILE="/mnt/windows-iso/sources/install.esd"
+
+          else
+            echo "Không tìm thấy install.wim/install.esd."
+            sudo umount /mnt/windows-iso || true
+            exit 1
+          fi
+
+          echo "Image file:"
+          echo "$IMAGE_FILE"
+
+          wiminfo "$IMAGE_FILE" | tee image-info.txt
+
+          IMAGE_INDEX=$(
+            wiminfo "$IMAGE_FILE" |
+            awk '
+              /Index:/ {
+                idx=$2
+              }
+
+              /Name:/ {
+                if ($0 ~ /Windows 10 Pro/) {
+                  print idx
+                  exit
+                }
+              }
+            '
+          )
+
+          if [ -z "$IMAGE_INDEX" ]; then
+            IMAGE_INDEX=$(
+              wiminfo "$IMAGE_FILE" |
+              awk '/Index:/ {print $2; exit}'
+            )
+          fi
+
+          if [ -z "$IMAGE_INDEX" ]; then
+            echo "Không tìm được IMAGE_INDEX."
+            sudo umount /mnt/windows-iso || true
+            exit 1
+          fi
+
+          echo "Windows image index: $IMAGE_INDEX"
+
+          echo "IMAGE_INDEX=$IMAGE_INDEX" >> "$GITHUB_ENV"
+
+          sudo umount /mnt/windows-iso
+
+      # =========================================================
+      # 9. TẠO AUTOUNATTEND.XML
+      #
+      # Máy: NHAT
+      # User: RDP
+      # Password: Pzkxvu123@
+      # =========================================================
+      - name: Create Autounattend.xml
+        shell: bash
+        run: |
+          set -e
+
+          cd "$HOME/windows-vm"
 
           python3 <<'PY'
           import os
@@ -28,8 +462,10 @@ jobs:
           image_index = os.environ["IMAGE_INDEX"]
 
           xml = f'''<?xml version="1.0" encoding="utf-8"?>
-          <unattend xmlns="urn:schemas-microsoft-com:unattend"
-                    xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+
+          <unattend
+            xmlns="urn:schemas-microsoft-com:unattend"
+            xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
 
             <settings pass="windowsPE">
 
@@ -57,6 +493,7 @@ jobs:
                 <DiskConfiguration>
 
                   <Disk wcm:action="add">
+
                     <DiskID>0</DiskID>
                     <WillWipeDisk>true</WillWipeDisk>
 
@@ -117,10 +554,12 @@ jobs:
                   <OSImage>
 
                     <InstallFrom>
+
                       <MetaData wcm:action="add">
                         <Key>/IMAGE/INDEX</Key>
                         <Value>{image_index}</Value>
                       </MetaData>
+
                     </InstallFrom>
 
                     <InstallTo>
@@ -173,6 +612,7 @@ jobs:
                     <LocalAccount wcm:action="add">
 
                       <Name>{username}</Name>
+
                       <Group>Administrators</Group>
 
                       <Password>
@@ -187,6 +627,7 @@ jobs:
                 </UserAccounts>
 
                 <AutoLogon>
+
                   <Enabled>true</Enabled>
                   <Username>{username}</Username>
                   <LogonCount>1</LogonCount>
@@ -199,34 +640,45 @@ jobs:
                 </AutoLogon>
 
                 <OOBE>
+
                   <HideEULAPage>true</HideEULAPage>
                   <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
                   <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
                   <NetworkLocation>Work</NetworkLocation>
                   <ProtectYourPC>3</ProtectYourPC>
+
                 </OOBE>
 
                 <FirstLogonCommands>
 
                   <SynchronousCommand wcm:action="add">
+
                     <Order>1</Order>
+
                     <CommandLine>
                       cmd /c netsh advfirewall firewall set rule group="remote desktop" new enable=Yes
                     </CommandLine>
+
                   </SynchronousCommand>
 
                   <SynchronousCommand wcm:action="add">
+
                     <Order>2</Order>
+
                     <CommandLine>
                       powershell.exe -ExecutionPolicy Bypass -Command "Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name 'fDenyTSConnections' -Value 0"
                     </CommandLine>
+
                   </SynchronousCommand>
 
                   <SynchronousCommand wcm:action="add">
+
                     <Order>3</Order>
+
                     <CommandLine>
                       cmd /c net localgroup "Remote Desktop Users" {username} /add
                     </CommandLine>
+
                   </SynchronousCommand>
 
                 </FirstLogonCommands>
@@ -245,3 +697,204 @@ jobs:
           print("Computer name: NHAT")
           print("Username: RDP")
           PY
+
+      # =========================================================
+      # 10. TẠO ISO CHỨA AUTOUNATTEND
+      # =========================================================
+      - name: Create unattended ISO
+        shell: bash
+        run: |
+          set -e
+
+          cd "$HOME/windows-vm"
+
+          xorriso \
+            -as mkisofs \
+            -iso-level 3 \
+            -V AUTOUNATTEND \
+            -o unattended.iso \
+            Autounattend.xml
+
+          ls -lh unattended.iso
+
+      # =========================================================
+      # 11. TẠO Ổ CỨNG VM 80GB
+      # =========================================================
+      - name: Create Windows disk
+        shell: bash
+        run: |
+          set -e
+
+          cd "$HOME/windows-vm"
+
+          qemu-img create \
+            -f qcow2 \
+            windows.qcow2 \
+            80G
+
+          qemu-img info windows.qcow2
+
+      # =========================================================
+      # 12. UEFI
+      # =========================================================
+      - name: Prepare UEFI
+        shell: bash
+        run: |
+          set -e
+
+          cd "$HOME/windows-vm"
+
+          cp \
+            /usr/share/OVMF/OVMF_VARS.fd \
+            OVMF_VARS.fd
+
+      # =========================================================
+      # 13. KHỞI ĐỘNG WINDOWS 10 BẰNG QEMU
+      # =========================================================
+      - name: Start Windows 10 VM
+        shell: bash
+        run: |
+          set -e
+
+          cd "$HOME/windows-vm"
+
+          if [ -e /dev/kvm ]; then
+            ACCEL="-enable-kvm"
+            CPU="host"
+          else
+            ACCEL=""
+            CPU="qemu64"
+          fi
+
+          sudo qemu-system-x86_64 \
+            $ACCEL \
+            -machine q35 \
+            -cpu "$CPU" \
+            -smp 4 \
+            -m 8G \
+            \
+            -drive "if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE.fd" \
+            \
+            -drive "if=pflash,format=raw,file=$HOME/windows-vm/OVMF_VARS.fd" \
+            \
+            -drive "file=$HOME/windows-vm/windows.qcow2,if=ide,format=qcow2" \
+            \
+            -drive "media=cdrom,readonly=on,file=$HOME/windows-vm/windows.iso" \
+            \
+            -drive "media=cdrom,readonly=on,file=$HOME/windows-vm/unattended.iso" \
+            \
+            -netdev "user,id=net0,hostfwd=0.0.0.0:13389-:3389" \
+            \
+            -device e1000,netdev=net0 \
+            \
+            -display none \
+            \
+            -vnc 127.0.0.1:5900 \
+            \
+            -daemonize \
+            \
+            -pidfile "$HOME/windows-vm/qemu.pid" \
+            \
+            -D "$HOME/windows-vm/qemu.log"
+
+          sleep 15
+
+          if ! sudo kill -0 "$(cat "$HOME/windows-vm/qemu.pid")" 2>/dev/null; then
+
+            echo "QEMU không chạy."
+
+            sudo cat "$HOME/windows-vm/qemu.log" || true
+
+            exit 1
+
+          fi
+
+          echo "Windows 10 VM đã khởi động."
+
+      # =========================================================
+      # 14. CHỜ RDP
+      # =========================================================
+      - name: Wait for Windows RDP
+        shell: bash
+        run: |
+          set +e
+
+          echo "Đang chờ Windows 10 hoàn tất cài đặt..."
+
+          for i in $(seq 1 90); do
+
+            if timeout 2 bash -c \
+              '</dev/tcp/127.0.0.1/13389' \
+              2>/dev/null
+            then
+
+              echo "RDP đã mở."
+              exit 0
+
+            fi
+
+            echo "[$i/90] Windows chưa sẵn sàng..."
+            sleep 10
+
+          done
+
+          echo "RDP chưa mở sau thời gian chờ."
+
+      # =========================================================
+      # 15. THÔNG TIN KẾT NỐI
+      # =========================================================
+      - name: Connection information
+        shell: bash
+        run: |
+          echo ""
+          echo "=============================================="
+          echo "            WINDOWS 10 QEMU VM"
+          echo "=============================================="
+          echo ""
+          echo "Computer name:"
+          echo "NHAT"
+          echo ""
+          echo "Username:"
+          echo "RDP"
+          echo ""
+          echo "Password:"
+          echo "Pzkxvu123@"
+          echo ""
+          echo "Tailscale IP:"
+          echo "$TS_IP"
+          echo ""
+          echo "RDP address:"
+          echo "$TS_IP:13389"
+          echo ""
+          echo "=============================================="
+
+      # =========================================================
+      # 16. GIỮ VM CHẠY
+      # =========================================================
+      - name: Keep VM alive
+        shell: bash
+        run: |
+          while sudo kill -0 "$(cat "$HOME/windows-vm/qemu.pid")" 2>/dev/null; do
+
+            echo "[$(date)] Windows 10 VM đang chạy..."
+
+            sleep 300
+
+          done
+
+          echo "Windows VM đã dừng."
+
+      # =========================================================
+      # 17. HIỆN QEMU LOG NẾU CÓ LỖI
+      # =========================================================
+      - name: Show QEMU log
+        if: always()
+        shell: bash
+        run: |
+          if [ -f "$HOME/windows-vm/qemu.log" ]; then
+
+            echo "========== QEMU LOG =========="
+
+            sudo cat "$HOME/windows-vm/qemu.log"
+
+          fi
