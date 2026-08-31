@@ -1,6 +1,18 @@
-      - name: Create Autounattend.xml
+name: Windows-10-QEMU-RDP
+
+on:
+  workflow_dispatch:
+
+jobs:
+  windows-vm:
+    runs-on: self-hosted
+    timeout-minutes: 360
+
+    steps:
+      - name: Test workflow
         shell: bash
         run: |
+          echo "Workflow OK"
           set -e
 
           cd "$HOME/windows-vm"
