@@ -9,43 +9,73 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - name: Configure RDP
+      - name: Configure Core RDP Settings
         run: |
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
-          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+
+          netsh advfirewall firewall delete rule name="RDP-Ngrok"
+          netsh advfirewall firewall add rule name="RDP-Ngrok" dir=in action=allow protocol=TCP localport=3389
+
           Restart-Service -Name TermService -Force
 
-      - name: Create RDP User
+      - name: Create RDP User with Custom Password
         run: |
-          $username = "nhat"
           $password = "Pzkxvu123@"
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
           
-          New-LocalUser -Name $username -Password $securePass -AccountNeverExpires
-          Add-LocalGroupMember -Group "Administrators" -Member $username
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username
+          New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
           
-          echo "RDP_USER=$username" >> $env:GITHUB_ENV
           echo "RDP_PASS=$password" >> $env:GITHUB_ENV
-
-      - name: Start TCP Tunnel
-        run: |
-          Invoke-WebRequest -Uri "https://github.com/rapydo/ssh-tunnel/releases/download/v1.0/plink.exe" -OutFile "plink.exe"
-          Start-Process -FilePath ".\plink.exe" -ArgumentList "-batch -ssh -R 0:localhost:3389 tunnel.us.ngrok.com" -RedirectStandardOutput "tunnel.log" -PassThru
           
-          Start-Sleep -Seconds 5
-          $cleanUrl = (Get-Content tunnel.log -Raw) -replace ".*tcp://", ""
-          echo "RDP_TCP=$cleanUrl" >> $env:GITHUB_ENV
+          if (-not (Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue)) {
+              Write-Error "User creation failed"
+              exit 1
+          }
+
+      - name: Install and Start Ngrok
+        env:
+          NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
+        run: |
+          Invoke-WebRequest -Uri "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip" -OutFile "ngrok.zip"
+          Expand-Archive ngrok.zip -DestinationPath . -Force
+          
+          .\ngrok.exe config add-authtoken $env:NGROK_AUTH_TOKEN
+          Start-Process -FilePath ".\ngrok.exe" -ArgumentList "tcp 3389"
+          
+          $ngrokIP = ""
+          $retries = 0
+          while (-not $ngrokIP -and $retries -lt 15) {
+              Start-Sleep -Seconds 3
+              try {
+                  $tunnels = Invoke-RestMethod -Uri http://localhost:4040/api/tunnels -ErrorAction Stop
+                  if ($tunnels.tunnels.count -gt 0) {
+                      $publicUrl = ($tunnels.tunnels | Where-Object {$_.proto -eq 'tcp'}).public_url
+                      $ngrokIP = $publicUrl -replace "tcp://", ""
+                      break
+                  }
+              } catch {
+                  Write-Host "Waiting for Ngrok tunnel..."
+              }
+              $retries++
+          }
+          
+          if (-not $ngrokIP) {
+              Write-Error "Ngrok tunnel failed to start. Check your NGROK_AUTH_TOKEN."
+              exit 1
+          }
+          echo "NGROK_IP=$ngrokIP" >> $env:GITHUB_ENV
 
       - name: Maintain Connection
         run: |
-          Write-Host "`n==============================================="
-          Write-Host "DIA CHI RDP : $env:RDP_TCP"
-          Write-Host "USERNAME    : $env:RDP_USER"
-          Write-Host "PASSWORD    : $env:RDP_PASS"
-          Write-Host "===============================================`n"
+          Write-Host "`n=== RDP ACCESS ==="
+          Write-Host "Address  : $env:NGROK_IP"
+          Write-Host "Username : RDP"
+          Write-Host "Password : $env:RDP_PASS"
+          Write-Host "==================`n"
           
           while ($true) {
               Write-Host "[$(Get-Date)] RDP Active - Cancel workflow run to terminate"
