@@ -1,4 +1,4 @@
-name: nhat
+name: ez
 
 on:
   workflow_dispatch:
@@ -30,25 +30,32 @@ jobs:
           echo "RDP_USER=$username" >> $env:GITHUB_ENV
           echo "RDP_PASS=$password" >> $env:GITHUB_ENV
 
-      - name: Start Ngrok Official
-        env:
-          NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
+      - name: Start Loophole Tunnel
         run: |
-          curl.exe -sLO https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip
-          Expand-Archive ngrok-v3-stable-windows-amd64.zip -DestinationPath .
-          .\ngrok.exe config add-authtoken $env:NGROK_AUTH_TOKEN
-          Start-Process -FilePath ".\ngrok.exe" -ArgumentList "tcp 3389"
+          Invoke-WebRequest https://github.com/loophole/cli/releases/download/v1.0.0/loophole_1.0.0_windows_amd64.tar.gz -OutFile loophole.tar.gz
+          tar -xvf loophole.tar.gz
+          Start-Process -FilePath ".\loophole.exe" -ArgumentList "tcp 3389" -RedirectStandardOutput "loophole.log" -PassThru
           
-          Start-Sleep -Seconds 6
-          $tunnels = Invoke-RestMethod -Uri http://localhost:4040/api/tunnels
-          $publicUrl = ($tunnels.tunnels | Where-Object {$_.proto -eq 'tcp'}).public_url
-          $cleanUrl = $publicUrl -replace "tcp://", ""
-          echo "NGROK_URL=$cleanUrl" >> $env:GITHUB_ENV
+          $cleanUrl = ""
+          $retries = 0
+          while ($retries -lt 15) {
+              Start-Sleep -Seconds 3
+              if (Test-Path "loophole.log") {
+                  $log = Get-Content loophole.log -Raw
+                  if ($log -match 'lh\.loca\.lt:\d+') {
+                      $cleanUrl = $matches[0]
+                      break
+                  }
+              }
+              $retries++
+          }
+          
+          echo "LH_URL=$cleanUrl" >> $env:GITHUB_ENV
 
       - name: Maintain Connection
         run: |
           Write-Host "`n==============================================="
-          Write-Host "DIA CHI RDP : $env:NGROK_URL"
+          Write-Host "DIA CHI RDP : $env:LH_URL"
           Write-Host "USERNAME    : $env:RDP_USER"
           Write-Host "PASSWORD    : $env:RDP_PASS"
           Write-Host "===============================================`n"
