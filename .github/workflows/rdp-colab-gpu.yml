@@ -29,47 +29,37 @@ jobs:
           
           echo "RDP_PASS=$password" >> $env:GITHUB_ENV
 
-      - name: Install and Start Ngrok via Chocolatey
-        env:
-          NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
+      - name: Start Pinggy TCP Tunnel
         run: |
-          choco install ngrok -y
+          $sshCmd = "ssh -o StrictHostKeyChecking=no -p 443 -R0:localhost:3389 tcp@a.pinggy.io"
+          Start-Process -FilePath "cmd.exe" -ArgumentList "/c $sshCmd > pinggy.log 2>&1" -PassThru
           
-          ngrok config add-authtoken $env:NGROK_AUTH_TOKEN
-          
-          Start-Process -FilePath "ngrok" -ArgumentList "tcp 3389 --log=stdout" -RedirectStandardOutput "ngrok.log" -RedirectStandardError "ngrok_err.log" -PassThru
-          
-          $ngrokIP = ""
+          $pinggyIP = ""
           $retries = 0
-          while (-not $ngrokIP -and $retries -lt 12) {
+          while (-not $pinggyIP -and $retries -lt 15) {
               Start-Sleep -Seconds 3
-              try {
-                  $tunnels = Invoke-RestMethod -Uri http://localhost:4040/api/tunnels -ErrorAction Stop
-                  if ($tunnels.tunnels.count -gt 0) {
-                      $publicUrl = ($tunnels.tunnels | Where-Object {$_.proto -eq 'tcp'}).public_url
-                      $ngrokIP = $publicUrl -replace "tcp://", ""
+              if (Test-Path "pinggy.log") {
+                  $log = Get-Content pinggy.log -Raw
+                  if ($log -match 'tcp://([a-zA-Z0-9\.\-]+\:[0-9]+)') {
+                      $pinggyIP = $matches[1]
                       break
                   }
-              } catch {
-                  Write-Host "Dang cho Ngrok khoi tao..."
               }
               $retries++
           }
           
-          if (-not $ngrokIP) {
-              Write-Host "================= NGROK LOG LORI ================="
-              if (Test-Path "ngrok.log") { Get-Content ngrok.log }
-              if (Test-Path "ngrok_err.log") { Get-Content ngrok_err.log }
-              Write-Host "=================================================="
-              Write-Error "Khong the ket noi Ngrok. Hay xem chi tiet log phia tren!"
+          if (-not $pinggyIP) {
+              Write-Host "--- PINGGY LOG ---"
+              if (Test-Path "pinggy.log") { Get-Content pinggy.log }
+              Write-Error "Khong the khoi tao Pinggy Tunnel."
               exit 1
           }
-          echo "NGROK_IP=$ngrokIP" >> $env:GITHUB_ENV
+          echo "PINGGY_IP=$pinggyIP" >> $env:GITHUB_ENV
 
       - name: Maintain Connection
         run: |
           Write-Host "`n==============================================="
-          Write-Host "DIA CHI RDP : $env:NGROK_IP"
+          Write-Host "DIA CHI RDP : $env:PINGGY_IP"
           Write-Host "USERNAME    : RDP"
           Write-Host "PASSWORD    : $env:RDP_PASS"
           Write-Host "===============================================`n"
