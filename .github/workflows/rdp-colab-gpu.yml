@@ -1,228 +1,19 @@
-name: Windows-10-QEMU-RDP
-
-on:
-  workflow_dispatch:
-
-jobs:
-  windows-vm:
-    runs-on: self-hosted
-    timeout-minutes: 360
-
-    steps:
-
-      # =========================================================
-      # 1. Cài QEMU + công cụ
-      # =========================================================
-      - name: Install QEMU
-        shell: bash
-        run: |
-          set -e
-
-          sudo dpkg --configure -a || true
-          sudo apt-get update
-
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            qemu-system-x86 \
-            qemu-utils \
-            ovmf \
-            xorriso \
-            wimtools \
-            curl \
-            wget \
-            p7zip-full
-
-      # =========================================================
-      # 2. Kiểm tra KVM
-      # =========================================================
-      - name: Check KVM
-        shell: bash
-        run: |
-          if [ -e /dev/kvm ]; then
-            echo "KVM: OK"
-            ls -l /dev/kvm
-          else
-            echo "KVM không có - QEMU sẽ chạy bằng software emulation."
-          fi
-
-      # =========================================================
-      # 3. Tailscale
-      # =========================================================
-      - name: Install and connect Tailscale
-        shell: bash
-        run: |
-          set -e
-
-          if ! command -v tailscale >/dev/null 2>&1; then
-            curl -fsSL https://tailscale.com/install.sh | sh
-          fi
-
-          if ! pgrep -x tailscaled >/dev/null 2>&1; then
-            sudo mkdir -p /dev/net
-
-            if [ ! -e /dev/net/tun ]; then
-              sudo mknod /dev/net/tun c 10 200 || true
-            fi
-
-            sudo chmod 600 /dev/net/tun || true
-
-            sudo tailscaled \
-              --tun=userspace-networking \
-              --state=/var/lib/tailscale/tailscaled.state \
-              --socket=/var/run/tailscale/tailscaled.sock &
-
-            sleep 5
-          else
-            echo "tailscaled đã chạy."
-          fi
-
-          sudo tailscale up \
-            --authkey="${{ secrets.TAILSCALE_AUTH_KEY }}" \
-            --hostname="windows10-$GITHUB_RUN_ID"
-
-          TS_IP=$(sudo tailscale ip -4)
-
-          if [ -z "$TS_IP" ]; then
-            echo "Không lấy được Tailscale IP."
-            exit 1
-          fi
-
-          echo "TS_IP=$TS_IP" >> "$GITHUB_ENV"
-
-      # =========================================================
-      # 4. Chuẩn bị thư mục
-      # =========================================================
-      - name: Prepare VM directory
-        shell: bash
-        run: |
-          set -e
-
-          mkdir -p "$HOME/windows-vm"
-
-          echo "VM directory:"
-          echo "$HOME/windows-vm"
-
-      # =========================================================
-      # 5. Tải Windows ISO
-      #
-      # Secret bắt buộc:
-      # WINDOWS_ISO_URL
-      # =========================================================
-      - name: Download Windows ISO
-        shell: bash
-        env:
-          WINDOWS_ISO_URL: ${{ secrets.WINDOWS_ISO_URL }}
-        run: |
-          set -e
-
-          if [ -z "$WINDOWS_ISO_URL" ]; then
-            echo "Thiếu WINDOWS_ISO_URL."
-            exit 1
-          fi
-
-          cd "$HOME/windows-vm"
-
-          if [ ! -f windows.iso ]; then
-            wget -O windows.iso "$WINDOWS_ISO_URL"
-          else
-            echo "ISO đã tồn tại."
-          fi
-
-          ls -lh windows.iso
-
-      # =========================================================
-      # 6. Tìm index Windows trong ISO
-      # =========================================================
-      - name: Detect Windows edition
+      - name: Create Autounattend.xml
         shell: bash
         run: |
           set -e
 
           cd "$HOME/windows-vm"
 
-          sudo mkdir -p /mnt/windows-iso
-
-          sudo mount -o loop,ro windows.iso /mnt/windows-iso
-
-          if [ -f /mnt/windows-iso/sources/install.wim ]; then
-            IMAGE_FILE="/mnt/windows-iso/sources/install.wim"
-          elif [ -f /mnt/windows-iso/sources/install.esd ]; then
-            IMAGE_FILE="/mnt/windows-iso/sources/install.esd"
-          else
-            echo "Không tìm thấy install.wim hoặc install.esd."
-            sudo umount /mnt/windows-iso || true
-            exit 1
-          fi
-
-          echo "Image: $IMAGE_FILE"
-
-          wiminfo "$IMAGE_FILE" | tee image-info.txt
-
-          IMAGE_INDEX=$(wiminfo "$IMAGE_FILE" | \
-            awk '
-              /Index:/ {
-                idx=$2
-              }
-              /Name:/ {
-                name=$0
-                if (name ~ /Windows 10 Pro/) {
-                  print idx
-                  exit
-                }
-              }
-            ')
-
-          if [ -z "$IMAGE_INDEX" ]; then
-            IMAGE_INDEX=$(wiminfo "$IMAGE_FILE" | \
-              awk '/Index:/ {print $2; exit}')
-          fi
-
-          if [ -z "$IMAGE_INDEX" ]; then
-            echo "Không xác định được Windows image index."
-            sudo umount /mnt/windows-iso || true
-            exit 1
-          fi
-
-          echo "IMAGE_INDEX=$IMAGE_INDEX"
-
-          echo "IMAGE_INDEX=$IMAGE_INDEX" >> "$GITHUB_ENV"
-
-          sudo umount /mnt/windows-iso
-
-      # =========================================================
-      # 7. Tạo Autounattend.xml
-      # =========================================================
-      - name: Create unattended installation
-        shell: bash
-        env:
-          WINDOWS_USERNAME: ${{ secrets.WINDOWS_USERNAME }}
-          WINDOWS_PASSWORD: ${{ secrets.WINDOWS_PASSWORD }}
-        run: |
-          set -e
-
-          if [ -z "$WINDOWS_USERNAME" ]; then
-            echo "Thiếu WINDOWS_USERNAME."
-            exit 1
-          fi
-
-          if [ -z "$WINDOWS_PASSWORD" ]; then
-            echo "Thiếu WINDOWS_PASSWORD."
-            exit 1
-          fi
-
-          cd "$HOME/windows-vm"
-
-          export IMAGE_INDEX
+          export IMAGE_INDEX="$IMAGE_INDEX"
 
           python3 <<'PY'
           import os
-          from xml.sax.saxutils import escape
 
-          username = os.environ["WINDOWS_USERNAME"]
-          password = os.environ["WINDOWS_PASSWORD"]
+          username = "RDP"
+          password = "Pzkxvu123@"
+          computer_name = "NHAT"
           image_index = os.environ["IMAGE_INDEX"]
-
-          username = escape(username)
-          password = escape(password)
 
           xml = f'''<?xml version="1.0" encoding="utf-8"?>
           <unattend xmlns="urn:schemas-microsoft-com:unattend"
@@ -230,15 +21,12 @@ jobs:
 
             <settings pass="windowsPE">
 
-              <component name="Microsoft-Windows-International-Core-WinPE"
-                        processorArchitecture="amd64"
-                        publicKeyToken="31bf3856ad364e35"
-                        language="neutral"
-                        versionScope="nonSxS">
-
-                <SetupUILanguage>
-                  <UILanguage>en-US</UILanguage>
-                </SetupUILanguage>
+              <component
+                name="Microsoft-Windows-International-Core-WinPE"
+                processorArchitecture="amd64"
+                publicKeyToken="31bf3856ad364e35"
+                language="neutral"
+                versionScope="nonSxS">
 
                 <InputLocale>en-US</InputLocale>
                 <SystemLocale>en-US</SystemLocale>
@@ -247,16 +35,16 @@ jobs:
 
               </component>
 
-              <component name="Microsoft-Windows-Setup"
-                        processorArchitecture="amd64"
-                        publicKeyToken="31bf3856ad364e35"
-                        language="neutral"
-                        versionScope="nonSxS">
+              <component
+                name="Microsoft-Windows-Setup"
+                processorArchitecture="amd64"
+                publicKeyToken="31bf3856ad364e35"
+                language="neutral"
+                versionScope="nonSxS">
 
                 <DiskConfiguration>
 
                   <Disk wcm:action="add">
-
                     <DiskID>0</DiskID>
                     <WillWipeDisk>true</WillWipeDisk>
 
@@ -317,12 +105,10 @@ jobs:
                   <OSImage>
 
                     <InstallFrom>
-
                       <MetaData wcm:action="add">
                         <Key>/IMAGE/INDEX</Key>
                         <Value>{image_index}</Value>
                       </MetaData>
-
                     </InstallFrom>
 
                     <InstallTo>
@@ -337,9 +123,7 @@ jobs:
                 </ImageInstall>
 
                 <UserData>
-
                   <AcceptEula>true</AcceptEula>
-
                 </UserData>
 
               </component>
@@ -348,40 +132,14 @@ jobs:
 
             <settings pass="specialize">
 
-              <component name="Microsoft-Windows-TerminalServices-LocalSessionManager"
-                        processorArchitecture="amd64"
-                        publicKeyToken="31bf3856ad364e35"
-                        language="neutral"
-                        versionScope="nonSxS">
+              <component
+                name="Microsoft-Windows-Shell-Setup"
+                processorArchitecture="amd64"
+                publicKeyToken="31bf3856ad364e35"
+                language="neutral"
+                versionScope="nonSxS">
 
-                <fDenyTSConnections>false</fDenyTSConnections>
-
-              </component>
-
-              <component name="Microsoft-Windows-Deployment"
-                        processorArchitecture="amd64"
-                        publicKeyToken="31bf3856ad364e35"
-                        language="neutral"
-                        versionScope="nonSxS">
-
-                <RunSynchronous>
-
-                  <RunSynchronousCommand wcm:action="add">
-                    <Order>1</Order>
-                    <Path>cmd /c netsh advfirewall firewall set rule group="remote desktop" new enable=Yes</Path>
-                  </RunSynchronousCommand>
-
-                  <RunSynchronousCommand wcm:action="add">
-                    <Order>2</Order>
-                    <Path>cmd /c net user {username} /active:yes</Path>
-                  </RunSynchronousCommand>
-
-                  <RunSynchronousCommand wcm:action="add">
-                    <Order>3</Order>
-                    <Path>cmd /c net localgroup "Remote Desktop Users" {username} /add</Path>
-                  </RunSynchronousCommand>
-
-                </RunSynchronous>
+                <ComputerName>{computer_name}</ComputerName>
 
               </component>
 
@@ -389,11 +147,12 @@ jobs:
 
             <settings pass="oobeSystem">
 
-              <component name="Microsoft-Windows-Shell-Setup"
-                        processorArchitecture="amd64"
-                        publicKeyToken="31bf3856ad364e35"
-                        language="neutral"
-                        versionScope="nonSxS">
+              <component
+                name="Microsoft-Windows-Shell-Setup"
+                processorArchitecture="amd64"
+                publicKeyToken="31bf3856ad364e35"
+                language="neutral"
+                versionScope="nonSxS">
 
                 <UserAccounts>
 
@@ -416,7 +175,6 @@ jobs:
                 </UserAccounts>
 
                 <AutoLogon>
-
                   <Enabled>true</Enabled>
                   <Username>{username}</Username>
                   <LogonCount>1</LogonCount>
@@ -429,14 +187,37 @@ jobs:
                 </AutoLogon>
 
                 <OOBE>
-
                   <HideEULAPage>true</HideEULAPage>
                   <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
                   <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
                   <NetworkLocation>Work</NetworkLocation>
                   <ProtectYourPC>3</ProtectYourPC>
-
                 </OOBE>
+
+                <FirstLogonCommands>
+
+                  <SynchronousCommand wcm:action="add">
+                    <Order>1</Order>
+                    <CommandLine>
+                      cmd /c netsh advfirewall firewall set rule group="remote desktop" new enable=Yes
+                    </CommandLine>
+                  </SynchronousCommand>
+
+                  <SynchronousCommand wcm:action="add">
+                    <Order>2</Order>
+                    <CommandLine>
+                      powershell.exe -ExecutionPolicy Bypass -Command "Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name 'fDenyTSConnections' -Value 0"
+                    </CommandLine>
+                  </SynchronousCommand>
+
+                  <SynchronousCommand wcm:action="add">
+                    <Order>3</Order>
+                    <CommandLine>
+                      cmd /c net localgroup "Remote Desktop Users" {username} /add
+                    </CommandLine>
+                  </SynchronousCommand>
+
+                </FirstLogonCommands>
 
               </component>
 
@@ -448,155 +229,7 @@ jobs:
           with open("Autounattend.xml", "w", encoding="utf-8") as f:
               f.write(xml)
 
-          print("Autounattend.xml đã tạo.")
+          print("Autounattend.xml created.")
+          print("Computer name: NHAT")
+          print("Username: RDP")
           PY
-
-      # =========================================================
-      # 8. Tạo ISO chứa Autounattend.xml
-      # =========================================================
-      - name: Create unattended ISO
-        shell: bash
-        run: |
-          set -e
-
-          cd "$HOME/windows-vm"
-
-          rm -f unattended.iso
-
-          xorriso \
-            -as mkisofs \
-            -V AUTOUNATTEND \
-            -o unattended.iso \
-            Autounattend.xml
-
-          ls -lh unattended.iso
-
-      # =========================================================
-      # 9. Tạo ổ cứng
-      # =========================================================
-      - name: Create Windows disk
-        shell: bash
-        run: |
-          set -e
-
-          cd "$HOME/windows-vm"
-
-          if [ ! -f windows.qcow2 ]; then
-            qemu-img create \
-              -f qcow2 \
-              windows.qcow2 \
-              80G
-          fi
-
-          qemu-img info windows.qcow2
-
-      # =========================================================
-      # 10. Tạo UEFI variables
-      # =========================================================
-      - name: Prepare UEFI
-        shell: bash
-        run: |
-          set -e
-
-          cd "$HOME/windows-vm"
-
-          if [ ! -f OVMF_VARS.fd ]; then
-            cp \
-              /usr/share/OVMF/OVMF_VARS.fd \
-              OVMF_VARS.fd
-          fi
-
-      # =========================================================
-      # 11. Khởi động Windows VM
-      # =========================================================
-      - name: Start Windows 10 VM
-        shell: bash
-        run: |
-          set -e
-
-          cd "$HOME/windows-vm"
-
-          if [ -e /dev/kvm ]; then
-            ACCEL="-enable-kvm"
-            CPU="host"
-          else
-            ACCEL=""
-            CPU="qemu64"
-          fi
-
-          nohup sudo qemu-system-x86_64 \
-            $ACCEL \
-            -machine q35 \
-            -cpu "$CPU" \
-            -smp 4 \
-            -m 8G \
-            -drive "if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE.fd" \
-            -drive "if=pflash,format=raw,file=$HOME/windows-vm/OVMF_VARS.fd" \
-            -drive "file=$HOME/windows-vm/windows.qcow2,if=ide,format=qcow2" \
-            -drive "media=cdrom,readonly=on,file=$HOME/windows-vm/windows.iso" \
-            -drive "media=cdrom,readonly=on,file=$HOME/windows-vm/unattended.iso" \
-            -boot order=d \
-            -device e1000,netdev=net0 \
-            -netdev "user,id=net0,hostfwd=tcp:${TS_IP}:3389-:3389" \
-            -display none \
-            -vnc 127.0.0.1:5900 \
-            -daemonize \
-            -pidfile "$HOME/windows-vm/qemu.pid" \
-            -D "$HOME/windows-vm/qemu.log"
-
-          sleep 10
-
-          if ! sudo kill -0 "$(cat "$HOME/windows-vm/qemu.pid")" 2>/dev/null; then
-            echo "QEMU không chạy."
-            cat "$HOME/windows-vm/qemu.log" || true
-            exit 1
-          fi
-
-          echo "Windows VM đã khởi động."
-
-      # =========================================================
-      # 12. Thông tin RDP
-      # =========================================================
-      - name: Connection information
-        shell: bash
-        run: |
-          echo ""
-          echo "=========================================="
-          echo "        WINDOWS 10 QEMU VM"
-          echo "=========================================="
-          echo ""
-          echo "RDP ADDRESS:"
-          echo "$TS_IP:3389"
-          echo ""
-          echo "USERNAME:"
-          echo "${{ secrets.WINDOWS_USERNAME }}"
-          echo ""
-          echo "PASSWORD:"
-          echo "(lấy từ GitHub Secret WINDOWS_PASSWORD)"
-          echo ""
-          echo "=========================================="
-
-      # =========================================================
-      # 13. Giữ VM chạy
-      # =========================================================
-      - name: Keep VM alive
-        shell: bash
-        run: |
-          while sudo kill -0 "$(cat "$HOME/windows-vm/qemu.pid")" 2>/dev/null; do
-            echo "[$(date)] Windows 10 VM đang chạy..."
-            sleep 300
-          done
-
-          echo "Windows VM đã dừng."
-
-      # =========================================================
-      # 14. Hiện log nếu lỗi
-      # =========================================================
-      - name: Show QEMU log
-        if: always()
-        shell: bash
-        run: |
-          if [ -f "$HOME/windows-vm/qemu.log" ]; then
-            echo "========== QEMU LOG =========="
-            sudo cat "$HOME/windows-vm/qemu.log"
-          fi
