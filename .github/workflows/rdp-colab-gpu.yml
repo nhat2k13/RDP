@@ -30,31 +30,31 @@ jobs:
           echo "RDP_USER=$username" >> $env:GITHUB_ENV
           echo "RDP_PASS=$password" >> $env:GITHUB_ENV
 
-      - name: Start Cloudflare Tunnel
+      - name: Start Serveo Tunnel
         run: |
-          Invoke-WebRequest https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe -OutFile cloudflared.exe
-          $process = Start-Process -FilePath ".\cloudflared.exe" -ArgumentList "tunnel --url rdp://localhost:3389" -RedirectStandardError "cloudflared.log" -PassThru
+          Invoke-WebRequest https://the.earth.li/~sgtatham/putty/latest/w64/plink.exe -OutFile plink.exe
+          $process = Start-Process -FilePath ".\plink.exe" -ArgumentList "-batch -ssh -R 0:localhost:3389 -ServerAliveInterval 15 serveo.net" -RedirectStandardOutput "serveo.log" -PassThru
           
           $cleanUrl = ""
           $retries = 0
-          while ($retries -lt 20) {
+          while ($retries -lt 15) {
               Start-Sleep -Seconds 3
-              if (Test-Path "cloudflared.log") {
-                  $log = Get-Content cloudflared.log -Raw
-                  if ($log -match 'https://[a-zA-Z0-9\.\-]+\.trycloudflare\.com') {
-                      $cleanUrl = $matches[0] -replace "https://", ""
+              if (Test-Path "serveo.log") {
+                  $log = Get-Content serveo.log -Raw
+                  if ($log -match 'serveo\.net:\d+') {
+                      $cleanUrl = $matches[0]
                       break
                   }
               }
               $retries++
           }
           
-          echo "CF_URL=$cleanUrl" >> $env:GITHUB_ENV
+          echo "SERVEO_URL=$cleanUrl" >> $env:GITHUB_ENV
 
       - name: Maintain Connection
         run: |
           Write-Host "`n==============================================="
-          Write-Host "DIA CHI RDP : $env:CF_URL"
+          Write-Host "DIA CHI RDP : $env:SERVEO_URL"
           Write-Host "USERNAME    : $env:RDP_USER"
           Write-Host "PASSWORD    : $env:RDP_PASS"
           Write-Host "===============================================`n"
