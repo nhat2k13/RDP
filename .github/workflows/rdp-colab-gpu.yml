@@ -1,4 +1,39 @@
-- name: Install and Start Ngrok
+name: RDP
+
+on:
+  workflow_dispatch:
+
+jobs:
+  secure-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Configure Core RDP Settings
+        run: |
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
+
+          netsh advfirewall firewall delete rule name="RDP-Ngrok"
+          netsh advfirewall firewall add rule name="RDP-Ngrok" dir=in action=allow protocol=TCP localport=3389
+
+          Restart-Service -Name TermService -Force
+
+      - name: Create RDP User with Custom Password
+        run: |
+          $username = "nhat"
+          $password = "Pzkxvu123@"
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          
+          New-LocalUser -Name $username -Password $securePass -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member $username
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username
+          
+          echo "RDP_USER=$username" >> $env:GITHUB_ENV
+          echo "RDP_PASS=$password" >> $env:GITHUB_ENV
+
+      - name: Install and Start Ngrok
         env:
           NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
         run: |
@@ -7,7 +42,6 @@
           .\ngrok.exe authtoken $env:NGROK_AUTH_TOKEN
           Start-Process -FilePath ".\ngrok.exe" -ArgumentList "tcp 3389"
           
-          # Vòng lặp chờ Ngrok khởi động
           $tunnels = $null
           $retries = 0
           while (-not $tunnels -and $retries -lt 10) {
@@ -23,3 +57,16 @@
           $publicUrl = ($tunnels.tunnels | Where-Object {$_.proto -eq 'tcp'}).public_url
           $cleanUrl = $publicUrl -replace "tcp://", ""
           echo "NGROK_URL=$cleanUrl" >> $env:GITHUB_ENV
+
+      - name: Maintain Connection
+        run: |
+          Write-Host "`n==============================================="
+          Write-Host "DIA CHI RDP : $env:NGROK_URL"
+          Write-Host "USERNAME    : $env:RDP_USER"
+          Write-Host "PASSWORD    : $env:RDP_PASS"
+          Write-Host "===============================================`n"
+          
+          while ($true) {
+              Write-Host "[$(Get-Date)] RDP Active - Cancel workflow run to terminate"
+              Start-Sleep -Seconds 300
+          }
