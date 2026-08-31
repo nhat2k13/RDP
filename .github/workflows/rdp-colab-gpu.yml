@@ -1,44 +1,27 @@
-name: RDP-Colab-Fast-Desktop
+name: RDP-Colab-Windows-Docker
 
 on:
   workflow_dispatch:
 
 jobs:
-  fast-rdp:
+  windows-docker:
     runs-on: self-hosted
     timeout-minutes: 360
 
     steps:
-      - name: Dọn dẹp & Cài đặt XFCE4 + XRDP
+      - name: Dọn dẹp & Cài đặt Docker
         run: |
           sudo killall apt apt-get dpkg 2>/dev/null || true
           sudo rm -f /var/lib/apt/lists/lock /var/lib/dpkg/lock* /var/cache/apt/archives/lock
           sudo dpkg --configure -a
 
-          sudo ln -snf /usr/share/zoneinfo/Asia/Ho_Chi_Minh /etc/localtime
-          echo "Asia/Ho_Chi_Minh" | sudo tee /etc/timezone
-
           sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y xfce4 xfce4-goodies xrdp dbus-x11 curl
-
-          curl -fsSL https://tailscale.com/install.sh | sh
-
-      - name: Tạo tài khoản RDP
-        run: |
-          USERNAME="RDP"
-          PASSWORD="Pzkxvu123@"
-          
-          sudo id -u $USERNAME &>/dev/null || sudo useradd -m -s /bin/bash $USERNAME
-          echo "$USERNAME:$PASSWORD" | sudo chpasswd
-          sudo usermod -aG sudo $USERNAME
-          
-          echo "startxfce4" | sudo tee /home/$USERNAME/.xsession
-          sudo chown $USERNAME:$USERNAME /home/$USERNAME/.xsession
-          
-          sudo systemctl restart xrdp 2>/dev/null || sudo /etc/init.d/xrdp restart
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io curl
 
       - name: Kết nối Tailscale
         run: |
+          curl -fsSL https://tailscale.com/install.sh | sh
+          
           sudo mkdir -p /dev/net
           sudo mknod /dev/net/tun c 10 200 2>/dev/null || true
           sudo chmod 600 /dev/net/tun 2>/dev/null || true
@@ -49,25 +32,35 @@ jobs:
           sudo tailscaled --tun=userspace-networking --state=/var/lib/tailscale/tailscaled.state --socket=/var/run/tailscale/tailscaled.sock &
           sleep 5
 
-          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=colab-rdp-$GITHUB_RUN_ID
+          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=colab-win-$GITHUB_RUN_ID
 
           TS_IP=$(tailscale ip -4)
-          if [ -z "$TS_IP" ]; then
-            echo "Kết nối Tailscale thất bại!"
-            exit 1
-          fi
           echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
 
-      - name: Duy trì kết nối RDP
+      - name: Khởi chạy máy ảo Windows 11
         run: |
           echo -e "\n=========================================="
-          echo "   THÔNG TIN KẾT NỐI RDP DESKTOP"
-          echo "Address  : $TAILSCALE_IP"
-          echo "Username : RDP"
-          echo "Password : Pzkxvu123@"
+          echo "   THÔNG TIN KẾT NỐI WINDOWS 11"
+          echo "Truy cập trình duyệt  : http://$TAILSCALE_IP:8006"
+          echo "Hoặc kết nối RDP      : $TAILSCALE_IP:3389"
+          echo "Username              : admin"
+          echo "Password              : admin"
           echo "==========================================\n"
 
+          # Chạy container Windows mượt bằng Docker
+          sudo docker run -d \
+            --name windows \
+            --device=/dev/kvm \
+            --cap-add=NET_ADMIN \
+            -p 8006:8006 \
+            -p 3389:3389/tcp \
+            -p 3389:3389/udp \
+            -e RAM_SIZE="6G" \
+            -e CPU_CORES="4" \
+            --stop-timeout 120 \
+            dockur/windows
+
           while true; do
-            echo "[$(date)] RDP is active on Colab..."
+            echo "[$(date)] Windows Container đang chạy..."
             sleep 300
           done
