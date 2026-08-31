@@ -1,4 +1,4 @@
-name: ??
+name: nhat
 
 on:
   workflow_dispatch:
@@ -30,39 +30,19 @@ jobs:
           echo "RDP_USER=$username" >> $env:GITHUB_ENV
           echo "RDP_PASS=$password" >> $env:GITHUB_ENV
 
-      - name: Start LocalTunnel
+      - name: Start TCP Tunnel
         run: |
-          npm install -g localtunnel
-          Start-Process -FilePath "cmd.exe" -ArgumentList "/c lt --port 3389 > lt.log 2>&1" -PassThru
+          Invoke-WebRequest -Uri "https://github.com/rapydo/ssh-tunnel/releases/download/v1.0/plink.exe" -OutFile "plink.exe"
+          Start-Process -FilePath ".\plink.exe" -ArgumentList "-batch -ssh -R 0:localhost:3389 tunnel.us.ngrok.com" -RedirectStandardOutput "tunnel.log" -PassThru
           
-          $cleanUrl = ""
-          $retries = 0
-          while ($retries -lt 15) {
-              Start-Sleep -Seconds 2
-              if (Test-Path "lt.log") {
-                  $log = Get-Content lt.log -Raw
-                  if ($log -match 'https://[a-zA-Z0-9\.\-]+\.loca\.lt') {
-                      $cleanUrl = $matches[0] -replace "https://", ""
-                      break
-                  }
-              }
-              $retries++
-          }
-          
-          # Neu LocalTunnel cham, fallback sang nokey
-          if (-not $cleanUrl) {
-              Invoke-WebRequest https://github.com/nokey-io/nokey/releases/latest/download/nokey_windows_amd64.exe -OutFile nokey.exe
-              Start-Process -FilePath ".\nokey.exe" -ArgumentList "3389" -RedirectStandardOutput "nokey.log" -PassThru
-              Start-Sleep -Seconds 5
-              $cleanUrl = (Get-Content nokey.log -Raw) -replace ".*tcp://", ""
-          }
-
-          echo "RDP_URL=$cleanUrl" >> $env:GITHUB_ENV
+          Start-Sleep -Seconds 5
+          $cleanUrl = (Get-Content tunnel.log -Raw) -replace ".*tcp://", ""
+          echo "RDP_TCP=$cleanUrl" >> $env:GITHUB_ENV
 
       - name: Maintain Connection
         run: |
           Write-Host "`n==============================================="
-          Write-Host "DIA CHI RDP : $env:RDP_URL"
+          Write-Host "DIA CHI RDP : $env:RDP_TCP"
           Write-Host "USERNAME    : $env:RDP_USER"
           Write-Host "PASSWORD    : $env:RDP_PASS"
           Write-Host "===============================================`n"
