@@ -1,4 +1,4 @@
-name: ez
+name: ??
 
 on:
   workflow_dispatch:
@@ -30,32 +30,38 @@ jobs:
           echo "RDP_USER=$username" >> $env:GITHUB_ENV
           echo "RDP_PASS=$password" >> $env:GITHUB_ENV
 
-      - name: Start Loophole Tunnel
+      - name: Start Ngrok Official
+        env:
+          NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
         run: |
-          Invoke-WebRequest https://github.com/loophole/cli/releases/download/v1.0.0/loophole_1.0.0_windows_amd64.tar.gz -OutFile loophole.tar.gz
-          tar -xvf loophole.tar.gz
-          Start-Process -FilePath ".\loophole.exe" -ArgumentList "tcp 3389" -RedirectStandardOutput "loophole.log" -PassThru
+          Invoke-WebRequest https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip -OutFile ngrok.zip
+          Expand-Archive ngrok.zip -DestinationPath . -Force
+          .\ngrok.exe config add-authtoken $env:NGROK_AUTH_TOKEN
+          Start-Process -FilePath ".\ngrok.exe" -ArgumentList "tcp 3389"
           
           $cleanUrl = ""
           $retries = 0
-          while ($retries -lt 15) {
+          while ($retries -lt 12) {
               Start-Sleep -Seconds 3
-              if (Test-Path "loophole.log") {
-                  $log = Get-Content loophole.log -Raw
-                  if ($log -match 'lh\.loca\.lt:\d+') {
-                      $cleanUrl = $matches[0]
+              try {
+                  $tunnels = Invoke-RestMethod -Uri http://localhost:4040/api/tunnels -ErrorAction Stop
+                  if ($tunnels.tunnels.count -gt 0) {
+                      $publicUrl = ($tunnels.tunnels | Where-Object {$_.proto -eq 'tcp'}).public_url
+                      $cleanUrl = $publicUrl -replace "tcp://", ""
                       break
                   }
+              } catch {
+                  Write-Host "Dang ket noi Ngrok..."
               }
               $retries++
           }
           
-          echo "LH_URL=$cleanUrl" >> $env:GITHUB_ENV
+          echo "NGROK_URL=$cleanUrl" >> $env:GITHUB_ENV
 
       - name: Maintain Connection
         run: |
           Write-Host "`n==============================================="
-          Write-Host "DIA CHI RDP : $env:LH_URL"
+          Write-Host "DIA CHI RDP : $env:NGROK_URL"
           Write-Host "USERNAME    : $env:RDP_USER"
           Write-Host "PASSWORD    : $env:RDP_PASS"
           Write-Host "===============================================`n"
