@@ -30,40 +30,25 @@ jobs:
           echo "RDP_USER=$username" >> $env:GITHUB_ENV
           echo "RDP_PASS=$password" >> $env:GITHUB_ENV
 
-      - name: Start Ngrok Official
-        env:
-          NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
+      - name: Connect Tailscale
         run: |
-          Invoke-WebRequest https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip -OutFile ngrok.zip
-          Expand-Archive ngrok.zip -DestinationPath . -Force
-          .\ngrok.exe config add-authtoken $env:NGROK_AUTH_TOKEN
-          Start-Process -FilePath ".\ngrok.exe" -ArgumentList "tcp 3389"
+          echo "Installing Tailscale..."
+          Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe" -OutFile "tailscale-setup.exe"
+          Start-Process -FilePath ".\tailscale-setup.exe" -ArgumentList "/quiet" -Wait
           
-          $cleanUrl = ""
-          $retries = 0
-          while ($retries -lt 12) {
-              Start-Sleep -Seconds 3
-              try {
-                  $tunnels = Invoke-RestMethod -Uri http://localhost:4040/api/tunnels -ErrorAction Stop
-                  if ($tunnels.tunnels.count -gt 0) {
-                      $publicUrl = ($tunnels.tunnels | Where-Object {$_.proto -eq 'tcp'}).public_url
-                      $cleanUrl = $publicUrl -replace "tcp://", ""
-                      break
-                  }
-              } catch {
-                  Write-Host "Dang ket noi Ngrok..."
-              }
-              $retries++
-          }
+          $tsPath = "C:\Program Files\Tailscale\tailscale.exe"
+          & $tsPath up --authkey "tskey-auth-kCYr7M2CNTRL-DfZ7M6uGg1WkL2Z" --hostname "github-rdp"
           
-          echo "NGROK_URL=$cleanUrl" >> $env:GITHUB_ENV
+          Start-Sleep -Seconds 5
+          $ip = (& $tsPath ip -4).Trim()
+          echo "TS_IP=$ip" >> $env:GITHUB_ENV
 
       - name: Maintain Connection
         run: |
           Write-Host "`n==============================================="
-          Write-Host "DIA CHI RDP : $env:NGROK_URL"
-          Write-Host "USERNAME    : $env:RDP_USER"
-          Write-Host "PASSWORD    : $env:RDP_PASS"
+          Write-Host "IP KET NOI RDP : $env:TS_IP"
+          Write-Host "USERNAME       : $env:RDP_USER"
+          Write-Host "PASSWORD       : $env:RDP_PASS"
           Write-Host "===============================================`n"
           
           while ($true) {
