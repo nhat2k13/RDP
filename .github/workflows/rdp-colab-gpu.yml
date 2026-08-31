@@ -1,15 +1,15 @@
-name: RDP-Colab-Windows-GPU-T4
+name: RDP-Colab-Fast-Desktop
 
 on:
   workflow_dispatch:
 
 jobs:
-  windows-rdp:
+  fast-rdp:
     runs-on: self-hosted
     timeout-minutes: 360
 
     steps:
-      - name: Dọn dẹp & Cài đặt công cụ
+      - name: Dọn dẹp & Cài đặt XFCE4 + XRDP
         run: |
           sudo killall apt apt-get dpkg 2>/dev/null || true
           sudo rm -f /var/lib/apt/lists/lock /var/lib/dpkg/lock* /var/cache/apt/archives/lock
@@ -19,19 +19,25 @@ jobs:
           echo "Asia/Ho_Chi_Minh" | sudo tee /etc/timezone
 
           sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y qemu-system-x86 qemu-utils wget curl
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y xfce4 xfce4-goodies xrdp dbus-x11 curl
 
           curl -fsSL https://tailscale.com/install.sh | sh
 
-      - name: Tải file đĩa Windows
+      - name: Tạo tài khoản RDP
         run: |
-          mkdir -p ~/windows
-          cd ~/windows
-          echo "Đang tải file đĩa ảo Windows 10..."
-          wget -O win10.qcow2 "https://archive.org/download/win10_qcow2_rdp/win10.qcow2" || \
-          curl -L -o win10.qcow2 "https://cloud-images.ubuntu.com/minimal/releases/focal/release/ubuntu-20.04-minimal-cloudimg-amd64.img"
+          USERNAME="RDP"
+          PASSWORD="Pzkxvu123@"
+          
+          sudo id -u $USERNAME &>/dev/null || sudo useradd -m -s /bin/bash $USERNAME
+          echo "$USERNAME:$PASSWORD" | sudo chpasswd
+          sudo usermod -aG sudo $USERNAME
+          
+          echo "startxfce4" | sudo tee /home/$USERNAME/.xsession
+          sudo chown $USERNAME:$USERNAME /home/$USERNAME/.xsession
+          
+          sudo systemctl restart xrdp 2>/dev/null || sudo /etc/init.d/xrdp restart
 
-      - name: Kết nối với Tailscale
+      - name: Kết nối Tailscale
         run: |
           sudo mkdir -p /dev/net
           sudo mknod /dev/net/tun c 10 200 2>/dev/null || true
@@ -43,7 +49,7 @@ jobs:
           sudo tailscaled --tun=userspace-networking --state=/var/lib/tailscale/tailscaled.state --socket=/var/run/tailscale/tailscaled.sock &
           sleep 5
 
-          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=colab-win10-$GITHUB_RUN_ID
+          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=colab-rdp-$GITHUB_RUN_ID
 
           TS_IP=$(tailscale ip -4)
           if [ -z "$TS_IP" ]; then
@@ -52,27 +58,16 @@ jobs:
           fi
           echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
 
-      - name: Khởi động máy ảo Windows và duy trì kết nối
+      - name: Duy trì kết nối RDP
         run: |
           echo -e "\n=========================================="
-          echo "   THÔNG TIN KẾT NỐI WINDOWS 10 RDP"
-          echo "Address  : $TAILSCALE_IP:3389"
-          echo "Username : Administrator"
+          echo "   THÔNG TIN KẾT NỐI RDP DESKTOP"
+          echo "Address  : $TAILSCALE_IP"
+          echo "Username : RDP"
           echo "Password : Pzkxvu123@"
           echo "==========================================\n"
 
-          # Chạy QEMU ngầm với dấu & cuối lệnh thay cho -daemonize
-          sudo qemu-system-x86_64 \
-            -m 8192 \
-            -smp cores=4 \
-            -hda ~/windows/win10.qcow2 \
-            -net nic,model=virtio \
-            -net user,hostfwd=tcp::3389-:3389 \
-            -display none \
-            -vga none &
-
-          # Giữ tiến trình để máy không bị đóng
           while true; do
-            echo "[$(date)] Windows 10 RDP is running on Colab..."
+            echo "[$(date)] RDP is active on Colab..."
             sleep 300
           done
