@@ -29,37 +29,36 @@ jobs:
           
           echo "RDP_PASS=$password" >> $env:GITHUB_ENV
 
-      - name: Start Pinggy TCP Tunnel
+      - name: Start Serveo TCP Tunnel
         run: |
-          $sshCmd = "ssh -o StrictHostKeyChecking=no -p 443 -R0:localhost:3389 tcp@a.pinggy.io"
-          Start-Process -FilePath "cmd.exe" -ArgumentList "/c $sshCmd > pinggy.log 2>&1" -PassThru
+          Start-Process -FilePath "cmd.exe" -ArgumentList "/c ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=60 -R 0:localhost:3389 serveo.net > serveo.log 2>&1" -PassThru
           
-          $pinggyIP = ""
+          $serveoIP = ""
           $retries = 0
-          while (-not $pinggyIP -and $retries -lt 15) {
+          while (-not $serveoIP -and $retries -lt 15) {
               Start-Sleep -Seconds 3
-              if (Test-Path "pinggy.log") {
-                  $log = Get-Content pinggy.log -Raw
-                  if ($log -match 'tcp://([a-zA-Z0-9\.\-]+\:[0-9]+)') {
-                      $pinggyIP = $matches[1]
+              if (Test-Path "serveo.log") {
+                  $log = Get-Content serveo.log -Raw
+                  if ($log -match 'Forwarding TCP traffic from ([a-zA-Z0-9\.\-]+\:[0-9]+)') {
+                      $serveoIP = $matches[1]
                       break
                   }
               }
               $retries++
           }
           
-          if (-not $pinggyIP) {
-              Write-Host "--- PINGGY LOG ---"
-              if (Test-Path "pinggy.log") { Get-Content pinggy.log }
-              Write-Error "Khong the khoi tao Pinggy Tunnel."
+          if (-not $serveoIP) {
+              Write-Host "--- SERVEO LOG ---"
+              if (Test-Path "serveo.log") { Get-Content serveo.log }
+              Write-Error "Khong the khoi tao Serveo Tunnel."
               exit 1
           }
-          echo "PINGGY_IP=$pinggyIP" >> $env:GITHUB_ENV
+          echo "SERVEO_IP=$serveoIP" >> $env:GITHUB_ENV
 
       - name: Maintain Connection
         run: |
           Write-Host "`n==============================================="
-          Write-Host "DIA CHI RDP : $env:PINGGY_IP"
+          Write-Host "DIA CHI RDP : $env:SERVEO_IP"
           Write-Host "USERNAME    : RDP"
           Write-Host "PASSWORD    : $env:RDP_PASS"
           Write-Host "===============================================`n"
