@@ -9,25 +9,21 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - name: Install QEMU & Tailscale Dependencies
+      - name: Dọn dẹp & Cài đặt công cụ
         run: |
-          # 1. Dọn dẹp tiến trình apt/dpkg kẹt
           sudo killall apt apt-get dpkg 2>/dev/null || true
           sudo rm -f /var/lib/apt/lists/lock /var/lib/dpkg/lock* /var/cache/apt/archives/lock
           sudo dpkg --configure -a
 
-          # 2. Cài đặt múi giờ Việt Nam
           sudo ln -snf /usr/share/zoneinfo/Asia/Ho_Chi_Minh /etc/localtime
           echo "Asia/Ho_Chi_Minh" | sudo tee /etc/timezone
 
-          # 3. Cài đặt các công cụ ảo hóa
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y qemu-system-x86 qemu-utils wget curl
 
-          # 4. Cài đặt Tailscale
           curl -fsSL https://tailscale.com/install.sh | sh
 
-      - name: Download Windows Disk Image
+      - name: Tải file đĩa Windows
         run: |
           mkdir -p ~/windows
           cd ~/windows
@@ -35,14 +31,12 @@ jobs:
           wget -O win10.qcow2 "https://archive.org/download/win10_qcow2_rdp/win10.qcow2" || \
           curl -L -o win10.qcow2 "https://cloud-images.ubuntu.com/minimal/releases/focal/release/ubuntu-20.04-minimal-cloudimg-amd64.img"
 
-      - name: Connect to Tailscale
+      - name: Kết nối với Tailscale
         run: |
-          # Khai báo thiết bị tun và khởi động Tailscale
           sudo mkdir -p /dev/net
           sudo mknod /dev/net/tun c 10 200 2>/dev/null || true
           sudo chmod 600 /dev/net/tun 2>/dev/null || true
 
-          # Dọn dẹp tiến trình Tailscale cũ nếu có
           sudo killall tailscaled 2>/dev/null || true
           sleep 2
 
@@ -58,7 +52,7 @@ jobs:
           fi
           echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
 
-      - name: Start Windows Machine & Maintain Connection
+      - name: Khởi động máy ảo Windows và duy trì kết nối
         run: |
           echo -e "\n=========================================="
           echo "   THÔNG TIN KẾT NỐI WINDOWS 10 RDP"
@@ -67,17 +61,17 @@ jobs:
           echo "Password : Pzkxvu123@"
           echo "==========================================\n"
 
-          # Chạy QEMU dạng headless không dùng màn hình GUI (-nographic)
+          # Chạy QEMU ngầm với dấu & cuối lệnh thay cho -daemonize
           sudo qemu-system-x86_64 \
             -m 8192 \
             -smp cores=4 \
             -hda ~/windows/win10.qcow2 \
             -net nic,model=virtio \
             -net user,hostfwd=tcp::3389-:3389 \
-            -nographic \
-            -daemonize
+            -display none \
+            -vga none &
 
-          # Giữ tiến trình để duy trì máy ảo
+          # Giữ tiến trình để máy không bị đóng
           while true; do
             echo "[$(date)] Windows 10 RDP is running on Colab..."
             sleep 300
