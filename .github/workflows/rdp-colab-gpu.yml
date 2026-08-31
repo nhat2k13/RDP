@@ -18,9 +18,9 @@ jobs:
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io curl
 
-          # Bật dịch vụ Docker Daemon
-          sudo service docker start || sudo systemctl start docker
-          sleep 3
+          # Khởi động Docker daemon trực tiếp (không dùng systemd/service)
+          sudo dockerd > /dev/null 2>&1 &
+          sleep 5
 
       - name: Kết nối Tailscale
         run: |
