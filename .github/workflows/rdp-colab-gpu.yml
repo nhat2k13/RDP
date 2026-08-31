@@ -1,42 +1,4 @@
-name: Nhat
-
-on:
-  workflow_dispatch:
-
-jobs:
-  secure-rdp:
-    runs-on: windows-latest
-    timeout-minutes: 360
-
-    steps:
-      - name: Configure Core RDP Settings
-        run: |
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
-
-          netsh advfirewall firewall delete rule name="RDP-Ngrok"
-          netsh advfirewall firewall add rule name="RDP-Ngrok" dir=in action=allow protocol=TCP localport=3389
-
-          Restart-Service -Name TermService -Force
-
-      - name: Create RDP User with Custom Password
-        run: |
-          $password = "Pzkxvu123@"
-          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-          
-          New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
-          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
-          
-          echo "RDP_PASS=$password" >> $env:GITHUB_ENV
-          
-          if (-not (Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue)) {
-              Write-Error "User creation failed"
-              exit 1
-          }
-
-      - name: Install and Start Ngrok
+- name: Install and Start Ngrok
         env:
           NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
         run: |
@@ -44,23 +6,20 @@ jobs:
           Expand-Archive ngrok.zip -DestinationPath .
           .\ngrok.exe authtoken $env:NGROK_AUTH_TOKEN
           Start-Process -FilePath ".\ngrok.exe" -ArgumentList "tcp 3389"
-          Start-Sleep -Seconds 5
           
-          $tunnels = Invoke-RestMethod -Uri http://localhost:4040/api/tunnels
+          # Vòng lặp chờ Ngrok khởi động
+          $tunnels = $null
+          $retries = 0
+          while (-not $tunnels -and $retries -lt 10) {
+              Start-Sleep -Seconds 3
+              try {
+                  $tunnels = Invoke-RestMethod -Uri http://localhost:4040/api/tunnels -ErrorAction Stop
+              } catch {
+                  Write-Host "Dang cho Ngrok khoi dong..."
+              }
+              $retries++
+          }
+          
           $publicUrl = ($tunnels.tunnels | Where-Object {$_.proto -eq 'tcp'}).public_url
           $cleanUrl = $publicUrl -replace "tcp://", ""
-          
           echo "NGROK_URL=$cleanUrl" >> $env:GITHUB_ENV
-
-      - name: Maintain Connection
-        run: |
-          Write-Host "`n==============================================="
-          Write-Host "DIA CHI RDP : $env:NGROK_URL"
-          Write-Host "USERNAME    : nhat"
-          Write-Host "PASSWORD    : Pzkxvu123@"
-          Write-Host "===============================================`n"
-          
-          while ($true) {
-              Write-Host "[$(Get-Date)] RDP Active - Cancel workflow run to terminate"
-              Start-Sleep -Seconds 300
-          }
