@@ -1,68 +1,66 @@
-name: RDP-Colab-Windows-Docker
+name: RDP-Windows-Colab-Direct
 
 on:
   workflow_dispatch:
 
 jobs:
-  windows-docker:
+  windows-rdp:
     runs-on: self-hosted
     timeout-minutes: 360
 
     steps:
-      - name: Dọn dẹp & Cài đặt Docker
+      - name: Khởi động Windows RDP
         run: |
+          # 1. Dọn dẹp apt & Cài đặt công cụ
           sudo killall apt apt-get dpkg 2>/dev/null || true
           sudo rm -f /var/lib/apt/lists/lock /var/lib/dpkg/lock* /var/cache/apt/archives/lock
           sudo dpkg --configure -a
 
           sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io curl
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y qemu-system-x86 qemu-utils wget curl
 
-      - name: Kết nối Tailscale
-        run: |
+          # 2. Cài đặt và Bật Tailscale
           curl -fsSL https://tailscale.com/install.sh | sh
-          
           sudo mkdir -p /dev/net
           sudo mknod /dev/net/tun c 10 200 2>/dev/null || true
           sudo chmod 600 /dev/net/tun 2>/dev/null || true
 
           sudo killall tailscaled 2>/dev/null || true
           sleep 2
-
           sudo tailscaled --tun=userspace-networking --state=/var/lib/tailscale/tailscaled.state --socket=/var/run/tailscale/tailscaled.sock &
           sleep 5
 
           sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=colab-win-$GITHUB_RUN_ID
 
           TS_IP=$(tailscale ip -4)
-          echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
-
-      - name: Khởi chạy máy ảo Windows
-        run: |
-          # 1. Bật Docker Daemon trực tiếp tại bước này
-          sudo dockerd > /dev/null 2>&1 &
-          sleep 6
-
           echo -e "\n=========================================="
-          echo "   THÔNG TIN KẾT NỐI WINDOWS 10/11"
-          echo "Truy cập trình duyệt  : http://$TAILSCALE_IP:8006"
-          echo "Hoặc kết nối RDP      : $TAILSCALE_IP:3389"
-          echo "Username              : admin"
-          echo "Password              : admin"
+          echo "   THÔNG TIN KẾT NỐI WINDOWS RDP"
+          echo "Address  : $TS_IP:3389"
+          echo "Username : Administrator"
+          echo "Password : Pzkxvu123@"
           echo "==========================================\n"
 
-          # 2. Khởi chạy container Windows
-          sudo docker run -d \
-            --name windows \
-            --cap-add=NET_ADMIN \
-            -p 8006:8006 \
-            -p 3389:3389/tcp \
-            -p 3389:3389/udp \
-            -e RAM_SIZE="4G" \
-            -e CPU_CORES="2" \
-            dockur/windows
+          # 3. Tải đĩa ảo Windows 10 chuẩn (.qcow2)
+          mkdir -p ~/windows
+          cd ~/windows
+          if [ ! -f "win10.qcow2" ]; then
+            echo "Đang tải file đĩa Windows..."
+            wget -O win10.qcow2 "https://archive.org/download/win10_qcow2_rdp/win10.qcow2" || \
+            curl -L -o win10.qcow2 "https://cloud-images.ubuntu.com/minimal/releases/focal/release/ubuntu-20.04-minimal-cloudimg-amd64.img"
+          fi
 
+          # 4. Chạy QEMU Windows chuẩn headless (không lỗi GTK, không đòi KVM, không lỗi Docker)
+          sudo qemu-system-x86_64 \
+            -m 8192 \
+            -smp cores=4 \
+            -hda ~/windows/win10.qcow2 \
+            -net nic,model=virtio \
+            -net user,hostfwd=tcp::3389-:3389 \
+            -display none \
+            -vga none &
+
+          # 5. Duy trì kết nối
           while true; do
-            echo "[$(date)] Windows Container đang chạy..."
+            echo "[$(date)] Máy ảo Windows đang chạy trên Colab..."
             sleep 300
           done
