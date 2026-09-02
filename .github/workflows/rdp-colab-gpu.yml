@@ -78,9 +78,9 @@ jobs:
           }
           Write-Host "TCP connectivity successful!"
 
-      - name: Download Photo to Desktop
+      - name: Download Photo to Public Desktop
         run: |
-          $desktopPath = "C:\Users\nhat\Desktop"
+          $desktopPath = "C:\Users\Public\Desktop"
           if (-not (Test-Path $desktopPath)) {
               New-Item -ItemType Directory -Path $desktopPath -Force
           }
