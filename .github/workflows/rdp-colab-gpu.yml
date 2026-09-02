@@ -78,7 +78,7 @@ jobs:
           }
           Write-Host "TCP connectivity successful!"
 
-      - name: Download Photo and Set as Wallpaper
+      - name: Download Photo and Set Wallpaper
         run: |
           $desktopPath = "C:\Users\Public\Desktop"
           if (-not (Test-Path $desktopPath)) {
@@ -87,11 +87,8 @@ jobs:
           $imgPath = "$desktopPath\victory.jpg"
           Invoke-WebRequest -Uri "https://files.catbox.moe/lb40wl.jpg" -OutFile $imgPath
 
-          # Đặt ảnh làm hình nền mặc định hệ thống
           Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name Wallpaper -Value $imgPath
-          Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\PersonalizationGPU' -Name WallPaper -Value $imgPath
 
-          # Gọi SystemParametersInfo để cập nhật hình nền tức thì
           $code = @'
           using System.Runtime.InteropServices;
           public class Wallpaper {
