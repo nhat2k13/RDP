@@ -78,13 +78,29 @@ jobs:
           }
           Write-Host "TCP connectivity successful!"
 
-      - name: Download Photo to Public Desktop
+      - name: Download Photo and Set as Wallpaper
         run: |
           $desktopPath = "C:\Users\Public\Desktop"
           if (-not (Test-Path $desktopPath)) {
               New-Item -ItemType Directory -Path $desktopPath -Force
           }
-          Invoke-WebRequest -Uri "https://files.catbox.moe/lb40wl.jpg" -OutFile "$desktopPath\victory.jpg"
+          $imgPath = "$desktopPath\victory.jpg"
+          Invoke-WebRequest -Uri "https://files.catbox.moe/lb40wl.jpg" -OutFile $imgPath
+
+          # Đặt ảnh làm hình nền mặc định hệ thống
+          Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name Wallpaper -Value $imgPath
+          Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\PersonalizationGPU' -Name WallPaper -Value $imgPath
+
+          # Gọi SystemParametersInfo để cập nhật hình nền tức thì
+          $code = @'
+          using System.Runtime.InteropServices;
+          public class Wallpaper {
+              [DllImport("user32.dll", CharSet = CharSet.Auto)]
+              public static extern int SystemParametersInfo(int uAction, int uParam, string lpvParam, int fuWinIni);
+          }
+          '@
+          Add-Type -TypeDefinition $code
+          [Wallpaper]::SystemParametersInfo(0x0014, 0, $imgPath, 0x01 -bor 0x02)
 
       - name: Maintain Connection
         run: |
