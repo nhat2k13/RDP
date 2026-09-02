@@ -33,11 +33,6 @@ jobs:
           
           echo "RDP_USER=$username" >> $env:GITHUB_ENV
           echo "RDP_PASS=$password" >> $env:GITHUB_ENV
-          
-          if (-not (Get-LocalUser -Name $username -ErrorAction SilentlyContinue)) {
-              Write-Error "User creation failed"
-              exit 1
-          }
 
       - name: Install Tailscale
         run: |
@@ -78,26 +73,26 @@ jobs:
           }
           Write-Host "TCP connectivity successful!"
 
-      - name: Download Photo and Set Wallpaper
+      - name: Download Photo and Auto Set Wallpaper on Login
         run: |
-          $desktopPath = "C:\Users\Public\Desktop"
-          if (-not (Test-Path $desktopPath)) {
-              New-Item -ItemType Directory -Path $desktopPath -Force
-          }
-          $imgPath = "$desktopPath\victory.jpg"
+          # 1. Tải ảnh về thư mục Public
+          $imgPath = "C:\Users\Public\victory.jpg"
           Invoke-WebRequest -Uri "https://files.catbox.moe/lb40wl.jpg" -OutFile $imgPath
-
-          Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name Wallpaper -Value $imgPath
-
-          $code = @'
-          using System.Runtime.InteropServices;
-          public class Wallpaper {
-              [DllImport("user32.dll", CharSet = CharSet.Auto)]
-              public static extern int SystemParametersInfo(int uAction, int uParam, string lpvParam, int fuWinIni);
-          }
-          '@
-          Add-Type -TypeDefinition $code
-          [Wallpaper]::SystemParametersInfo(0x0014, 0, $imgPath, 0x01 -bor 0x02)
+          
+          # 2. Tạo script PowerShell đổi wallpaper
+          $psScript = @"
+          Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name Wallpaper -Value '$imgPath'
+          Add-Type -TypeDefinition 'using System.Runtime.InteropServices; public class Wallpaper { [DllImport("user32.dll", CharSet = CharSet.Auto)] public static extern int SystemParametersInfo(int uAction, int uParam, string lpvParam, int fuWinIni); }'
+          [Wallpaper]::SystemParametersInfo(0x0014, 0, '$imgPath', 0x01 -bor 0x02)
+          "@
+          
+          $psFilePath = "C:\Users\Public\set_wallpaper.ps1"
+          $psScript | Out-File -FilePath $psFilePath -Encoding ascii
+          
+          # 3. Tạo file tự chạy trong Startup dùng chung cho mọi User
+          $startupFolder = "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\StartUp"
+          $batPath = "$startupFolder\set_wallpaper.bat"
+          "powershell -ExecutionPolicy Bypass -File `"$psFilePath`"" | Out-File -FilePath $batPath -Encoding ascii
 
       - name: Maintain Connection
         run: |
