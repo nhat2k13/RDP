@@ -1,91 +1,88 @@
-name: RDP
+name: RDP-Colab-GPU-T4
 
 on:
   workflow_dispatch:
 
 jobs:
   secure-rdp:
-    runs-on: windows-latest
+    runs-on: self-hosted
     timeout-minutes: 360
 
     steps:
-      - name: Configure Core RDP Settings
+      - name: Configure Vietnam Timezone, GPU Drivers & Desktop Environment
         run: |
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
+          # 1. Giải phóng khóa dpkg/apt bị kẹt
+          sudo killall apt apt-get dpkg 2>/dev/null || true
+          sudo rm -f /var/lib/apt/lists/lock /var/lib/dpkg/lock* /var/cache/apt/archives/lock
+          sudo dpkg --configure -a
+          
+          # 2. Cấu hình múi giờ Việt Nam
+          sudo ln -snf /usr/share/zoneinfo/Asia/Ho_Chi_Minh /etc/localtime
+          echo "Asia/Ho_Chi_Minh" | sudo tee /etc/timezone
+          
+          # 3. Cài đặt Driver NVIDIA & CUDA Toolkit (Tự động phát hiện card GPU)
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y nvidia-driver-535 nvidia-utils-535 mesa-utils
+          
+          # 4. Cài đặt Tailscale
+          curl -fsSL https://tailscale.com/install.sh | sh
+          
+          # 5. Cài đặt XFCE4 & XRDP
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y xfce4 xfce4-goodies xrdp tzdata
 
-          netsh advfirewall firewall delete rule name="RDP-Tailscale"
-          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
-
-          Restart-Service -Name TermService -Force
-
-      - name: Create RDP User with Custom Password
+      - name: Install Steam & 32-bit Architecture Support
         run: |
-          # Đổi mật khẩu của bạn ở đây (phải có chữ hoa, chữ thường, số và ký tự đặc biệt)
-          $password = "Pzkxvu123@"
+          # Bật kiến trúc 32-bit (bắt buộc để Steam và một số game 32-bit khởi chạy)
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
           
-          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-          
-          New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
-          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
-          
-          echo "RDP_PASS=$password" >> $env:GITHUB_ENV
-          
-          if (-not (Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue)) {
-              Write-Error "User creation failed"
-              exit 1
-          }
+          # Cài đặt Steam và các thư viện đồ họa 32-bit tương ứng
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y steam libgl1-mesa-dri:i386 libgl1-mesa-glx:i386
 
-      - name: Install Tailscale
+      - name: Create RDP User
         run: |
-          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
-          $installerPath = Join-Path $env:TEMP "tailscale.msi"
+          USERNAME="RDP"
+          Password="Pzkxvu123@"
           
-          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
-          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
-          Remove-Item $installerPath -Force
+          sudo id -u $USERNAME &>/dev/null || sudo useradd -m -s /bin/bash $USERNAME
+          echo "$USERNAME:$Password" | sudo chpasswd
+          sudo usermod -aG sudo,video,render $USERNAME
+          
+          echo "startxfce4" | sudo tee /home/$USERNAME/.xsession
+          sudo chown $USERNAME:$USERNAME /home/$USERNAME/.xsession
+          
+          sudo xrdp-sesman &
+          sudo xrdp &
 
-      - name: Establish Tailscale Connection
+      - name: Connect to Tailscale
         run: |
-          $tsExe = Join-Path $env:ProgramFiles "Tailscale\tailscale.exe"
-          & $tsExe up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
+          # Tạo thư mục và thiết bị tun (nếu thiếu) + Chạy Tailscale ở chế độ userspace
+          sudo mkdir -p /dev/net
+          sudo mknod /dev/net/tun c 10 200 2>/dev/null || true
+          sudo chmod 600 /dev/net/tun 2>/dev/null || true
           
-          $tsIP = $null
-          $retries = 0
-          while (-not $tsIP -and $retries -lt 10) {
-              $tsIP = & $tsExe ip -4
-              Start-Sleep -Seconds 5
-              $retries++
-          }
+          sudo tailscaled --tun=userspace-networking --state=/var/lib/tailscale/tailscaled.state --socket=/var/run/tailscale/tailscaled.sock &
+          sleep 5
           
-          if (-not $tsIP) {
-              Write-Error "Tailscale IP not assigned. Exiting."
-              exit 1
-          }
-          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
-
-      - name: Verify RDP Accessibility
-        run: |
-          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
+          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=colab-gpu-$GITHUB_RUN_ID
           
-          $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
-          if (-not $testResult.TcpTestSucceeded) {
-              Write-Error "TCP connection to RDP port 3389 failed"
-              exit 1
-          }
-          Write-Host "TCP connectivity successful!"
+          TS_IP=$(tailscale ip -4)
+          if [ -z "$TS_IP" ]; then
+            echo "Kết nối Tailscale thất bại!"
+            exit 1
+          fi
+          echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
 
       - name: Maintain Connection
         run: |
-          Write-Host "`n=== RDP ACCESS ==="
-          Write-Host "Address  : $env:TAILSCALE_IP"
-          Write-Host "Username : RDP"
-          Write-Host "Password : $env:RDP_PASS"
-          Write-Host "==================`n"
+          echo -e "\n=========================================="
+          echo "   THÔNG TIN KẾT NỐI RDP COLAB GPU T4"
+          echo "Address  : $TAILSCALE_IP"
+          echo "Username : RDP"
+          echo "Password : Pzkxvu123@"
+          echo "==========================================\n"
           
-          while ($true) {
-              Write-Host "[$(Get-Date)] RDP Active - Cancel workflow run to terminate"
-              Start-Sleep -Seconds 300
-          }
+          while true; do
+            echo "[$(date)] RDP Active on Colab GPU T4..."
+            sleep 300
+          done
