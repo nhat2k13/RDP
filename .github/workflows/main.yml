@@ -9,31 +9,32 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - name: Configure Vietnam Timezone, GPU Drivers & Desktop Environment
+      - name: Setup Fast Desktop & Dependencies
         run: |
-          # 1. Giải phóng khóa apt/dpkg bị kẹt
+          # 1. Giải phóng hoàn toàn các tiến trình apt/dpkg bị kẹt
           sudo killall apt apt-get dpkg 2>/dev/null || true
           sudo rm -f /var/lib/apt/lists/lock /var/lib/dpkg/lock* /var/cache/apt/archives/lock
           sudo dpkg --configure -a
 
-          # 2. Cài đặt múi giờ Việt Nam
-          sudo ln -snf /usr/share/zoneinfo/Asia/Ho_Chi_Minh /etc/localtime
-          echo "Asia/Ho_Chi_Minh" | sudo tee /etc/timezone
-
-          # 3. Cài đặt XFCE4, XRDP và các thư viện OpenGL của NVIDIA
-          sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y xfce4 xfce4-goodies xrdp mesa-utils dbus-x11 x11-xserver-utils
-          
-          # 4. Ép cấu hình Xorg sử dụng GPU NVIDIA T4 làm Card render chính
-          sudo nvidia-xconfig --allow-empty-initial-configuration --virtual=1920x1080 || true
-
-      - name: Install Steam & 32-bit Architecture Support
-        run: |
+          # 2. Bật kiến trúc 32-bit cho Steam & cập nhật hệ thống
           sudo dpkg --add-architecture i386
-          sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y steam libgl1-mesa-dri:i386 libgl1-mesa-glx:i386
+          sudo apt-get update -o Acquire::Retries=3
 
-      - name: Create RDP User
+          # 3. Cài đặt XFCE4, XRDP, Steam và các thư viện đồ họa OpenGL/Vulkan 32-bit
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            xfce4 xfce4-goodies xrdp dbus-x11 x11-xserver-utils mesa-utils \
+            steam libgl1-mesa-dri:i386 libgl1-mesa-glx:i386
+
+      - name: Fix NVIDIA Driver Mismatch
+        run: |
+          # Reload lại Kernel Module của NVIDIA để sửa lỗi NVML Driver/library version mismatch
+          sudo rmmod nvidia_uvm nvidia_drm nvidia_modeset nvidia 2>/dev/null || true
+          sudo modprobe nvidia || true
+          
+          # Kiểm tra lại xem GPU đã nhận diện chính xác chưa
+          nvidia-smi
+
+      - name: Configure User & NVIDIA GPU Offload
         run: |
           # Tạo user rdpuser nếu chưa có
           if ! id "rdpuser" &>/dev/null; then
@@ -41,8 +42,8 @@ jobs:
             echo "rdpuser:123456" | sudo chpasswd
             sudo usermod -aG sudo rdpuser
           fi
-          
-          # Ép môi trường XFCE4 và biến GPU NVIDIA cho User
+
+          # Ép môi trường XFCE4 và biến GPU PRIME Offload cho User
           echo "xfce4-session" > /home/rdpuser/.xsession
           echo "export __NV_PRIME_RENDER_OFFLOAD=1" >> /home/rdpuser/.bashrc
           echo "export __GLX_VENDOR_LIBRARY_NAME=nvidia" >> /home/rdpuser/.bashrc
@@ -50,29 +51,32 @@ jobs:
           echo "export __GLX_VENDOR_LIBRARY_NAME=nvidia" >> /home/rdpuser/.profile
           sudo chown -R rdpuser:rdpuser /home/rdpuser
 
-      - name: Connect Tailscale & Start GPU RDP
+      - name: Install Tailscale & Start RDP
         run: |
-          # Khởi chạy Tailscale
+          # Cài đặt Tailscale bằng script chính thức
           curl -fsSL https://tailscale.com/install.sh | sh
+
+          # Khởi chạy bộ định tuyến mạng Tailscale
           sudo mkdir -p /dev/net
           sudo mknod /dev/net/tun c 10 200 2>/dev/null || true
           sudo tailscaled --tun=userspace-networking --state=/var/lib/tailscale/tailscaled.state --socket=/var/run/tailscale/tailscaled.sock &
           sleep 5
           sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=colab-gpu-$GITHUB_RUN_ID
 
-          # Khởi động dịch vụ XRDP
+          # Cấu hình và khởi động XRDP
           sudo adduser xrdp ssl-cert
           sudo service xrdp restart
 
           TS_IP=$(tailscale ip -4)
           echo -e "\n=================================================="
-          echo "   KẾT NỐI RDP GPU NATIVE THÀNH CÔNG"
+          echo "   KẾT NỐI RDP GPU THÀNH CÔNG"
           echo "   IP Tailscale : $TS_IP"
-          echo "   Username     : rdpuser"
+          echo "   Username     : nhat"
           echo "   Password     : 123456"
           echo "==================================================\n"
 
+          # Giữ tiến trình chạy liên tục
           while true; do
-            echo "[$(date)] RDP GPU Running..."
+            echo "[$(date)] RDP Active with GPU..."
             sleep 300
           done
