@@ -20,50 +20,48 @@ jobs:
           sudo dpkg --add-architecture i386
           sudo apt-get update -o Acquire::Retries=3
 
-          # 3. Cài đặt XFCE4, XRDP, Steam và các thư viện đồ họa OpenGL/Vulkan 32-bit
+          # 3. Cài đặt XFCE4, XRDP, Steam và thư viện đồ họa
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             xfce4 xfce4-goodies xrdp dbus-x11 x11-xserver-utils mesa-utils \
             steam libgl1-mesa-dri:i386 libgl1-mesa-glx:i386
 
       - name: Fix NVIDIA Driver Mismatch
         run: |
-          # Reload lại Kernel Module của NVIDIA để sửa lỗi NVML Driver/library version mismatch
+          # Reload Kernel Module sửa lỗi NVML Mismatch
           sudo rmmod nvidia_uvm nvidia_drm nvidia_modeset nvidia 2>/dev/null || true
           sudo modprobe nvidia || true
-          
-          # Kiểm tra lại xem GPU đã nhận diện chính xác chưa
           nvidia-smi
 
-      - name: Configure User & NVIDIA GPU Offload
+      - name: Configure User 'nhat' & GPU Offload
         run: |
-          # Tạo user rdpuser nếu chưa có
-          if ! id "rdpuser" &>/dev/null; then
-            sudo useradd -m -s /bin/bash rdpuser
-            echo "rdpuser:123456" | sudo chpasswd
-            sudo usermod -aG sudo rdpuser
+          # Tạo user nhat đồng bộ với log
+          if ! id "nhat" &>/dev/null; then
+            sudo useradd -m -s /bin/bash nhat
+            echo "nhat:123456" | sudo chpasswd
+            sudo usermod -aG sudo nhat
           fi
 
-          # Ép môi trường XFCE4 và biến GPU PRIME Offload cho User
-          echo "xfce4-session" > /home/rdpuser/.xsession
-          echo "export __NV_PRIME_RENDER_OFFLOAD=1" >> /home/rdpuser/.bashrc
-          echo "export __GLX_VENDOR_LIBRARY_NAME=nvidia" >> /home/rdpuser/.bashrc
-          echo "export __NV_PRIME_RENDER_OFFLOAD=1" >> /home/rdpuser/.profile
-          echo "export __GLX_VENDOR_LIBRARY_NAME=nvidia" >> /home/rdpuser/.profile
-          sudo chown -R rdpuser:rdpuser /home/rdpuser
+          # Khởi tạo môi trường desktop XFCE4 cho user nhat
+          echo "startxfce4" > /home/nhat/.xsession
+          echo "export __NV_PRIME_RENDER_OFFLOAD=1" >> /home/nhat/.bashrc
+          echo "export __GLX_VENDOR_LIBRARY_NAME=nvidia" >> /home/nhat/.bashrc
+          echo "export __NV_PRIME_RENDER_OFFLOAD=1" >> /home/nhat/.profile
+          echo "export __GLX_VENDOR_LIBRARY_NAME=nvidia" >> /home/nhat/.profile
+          
+          # Cấp quyền hoàn toàn cho thư mục home của nhat
+          sudo chown -R nhat:nhat /home/nhat
+          sudo chmod +x /home/nhat/.xsession
 
       - name: Install Tailscale & Start RDP
         run: |
-          # Cài đặt Tailscale bằng script chính thức
           curl -fsSL https://tailscale.com/install.sh | sh
 
-          # Khởi chạy bộ định tuyến mạng Tailscale
           sudo mkdir -p /dev/net
           sudo mknod /dev/net/tun c 10 200 2>/dev/null || true
           sudo tailscaled --tun=userspace-networking --state=/var/lib/tailscale/tailscaled.state --socket=/var/run/tailscale/tailscaled.sock &
           sleep 5
           sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=colab-gpu-$GITHUB_RUN_ID
 
-          # Cấu hình và khởi động XRDP
           sudo adduser xrdp ssl-cert
           sudo service xrdp restart
 
@@ -75,7 +73,6 @@ jobs:
           echo "   Password     : 123456"
           echo "==================================================\n"
 
-          # Giữ tiến trình chạy liên tục
           while true; do
             echo "[$(date)] RDP Active with GPU..."
             sleep 300
