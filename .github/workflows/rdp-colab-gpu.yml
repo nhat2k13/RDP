@@ -7,7 +7,6 @@ jobs:
   secure-rdp:
     strategy:
       matrix:
-        # Tạo ra 5 luồng chạy song song để tăng tỷ lệ dính Washington lên 99%
         runner-node: [1, 2, 3, 4, 5]
       fail-fast: false
 
@@ -23,17 +22,6 @@ jobs:
               Write-Error "Khong phai may o Washington! Huy luong nay de nhuong cho luong khac..."
               exit 1
           }
-
-      - name: Expand Virtual Memory (PageFile) to 32GB
-        run: |
-          $System = Get-WmiObject -Class Win32_ComputerSystem -EnableAllPrivileges
-          $System.AutomaticManagedPagefile = $False
-          $System.Put()
-          $CurrentPageFile = Get-WmiObject -Class Win32_PageFileSetting
-          $CurrentPageFile.InitialSize = 25600
-          $CurrentPageFile.MaximumSize = 25600
-          $CurrentPageFile.Put()
-          Write-Host "Da tao thanh cong 25GB RAM ao tren SSD!"
 
       - name: Configure Core RDP Settings
         run: |
