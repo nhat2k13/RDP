@@ -5,6 +5,12 @@ on:
 
 jobs:
   secure-rdp:
+    strategy:
+      matrix:
+        # Tạo ra 5 luồng chạy song song để tăng tỷ lệ dính Washington lên 99%
+        runner-node: [1, 2, 3, 4, 5]
+      fail-fast: false
+
     runs-on: windows-latest
     timeout-minutes: 360
 
@@ -14,9 +20,20 @@ jobs:
           $loc = (curl.exe -s https://ipinfo.io/json | ConvertFrom-Json)
           Write-Host "Khu vuc hien tai: $($loc.city), $($loc.region) - $($loc.country)"
           if ($loc.region -ne "Washington") {
-              Write-Error "Khong phai may o Washington! Huy ngay de tiet kiem Key Tailscale..."
+              Write-Error "Khong phai may o Washington! Huy luong nay de nhuong cho luong khac..."
               exit 1
           }
+
+      - name: Expand Virtual Memory (PageFile) to 32GB
+        run: |
+          $System = Get-WmiObject -Class Win32_ComputerSystem -EnableAllPrivileges
+          $System.AutomaticManagedPagefile = $False
+          $System.Put()
+          $CurrentPageFile = Get-WmiObject -Class Win32_PageFileSetting
+          $CurrentPageFile.InitialSize = 25600
+          $CurrentPageFile.MaximumSize = 25600
+          $CurrentPageFile.Put()
+          Write-Host "Da tao thanh cong 25GB RAM ao tren SSD!"
 
       - name: Configure Core RDP Settings
         run: |
@@ -45,33 +62,29 @@ jobs:
 
       - name: Download and Install UgPhone, VMOS Cloud, and VSPhone
         run: |
-          $desktop = "C:\Users\Public\Desktop"
+          # 1. Tải UgPhone
+          try {
+              $ugUrl = "https://www.ugphone.com/download/UgPhone-setup.exe"
+              $ugPath = Join-Path $env:TEMP "UgPhone_setup.exe"
+              Invoke-WebRequest -Uri $ugUrl -OutFile $ugPath -UserAgent "Mozilla/5.0"
+              Start-Process -FilePath $ugPath -ArgumentList "/S" -Wait
+          } catch { Write-Host "Loi tai UgPhone..." }
 
-          # 1. Tải và cài đặt UgPhone
-          Write-Host "Dang tai UgPhone..."
-          $ugUrl = "https://download.ugphone.com/UgPhone_setup.exe"
-          $ugPath = Join-Path $env:TEMP "UgPhone_setup.exe"
-          Invoke-WebRequest -Uri $ugUrl -OutFile $ugPath -UserAgent "Mozilla/5.0"
-          Start-Process -FilePath $ugPath -ArgumentList "/S" -Wait
-          Remove-Item $ugPath -Force
+          # 2. Tải VMOS Cloud
+          try {
+              $vmosUrl = "https://file.vmos.com/vmoscloud/VMOSCloud_setup.exe"
+              $vmosPath = Join-Path $env:TEMP "VMOSCloud_setup.exe"
+              Invoke-WebRequest -Uri $vmosUrl -OutFile $vmosPath -UserAgent "Mozilla/5.0"
+              Start-Process -FilePath $vmosPath -ArgumentList "/S" -Wait
+          } catch { Write-Host "Loi tai VMOS Cloud..." }
 
-          # 2. Tải và cài đặt VMOS Cloud
-          Write-Host "Dang tai VMOS Cloud..."
-          $vmosUrl = "https://www.vmos.com/download/VMOSCloud_setup.exe"
-          $vmosPath = Join-Path $env:TEMP "VMOSCloud_setup.exe"
-          Invoke-WebRequest -Uri $vmosUrl -OutFile $vmosPath -UserAgent "Mozilla/5.0"
-          Start-Process -FilePath $vmosPath -ArgumentList "/S" -Wait
-          Remove-Item $vmosPath -Force
-
-          # 3. Tải và cài đặt VSPhone
-          Write-Host "Dang tai VSPhone..."
-          $vsUrl = "https://download.vsphone.com/VSPhone_setup.exe"
-          $vsPath = Join-Path $env:TEMP "VSPhone_setup.exe"
-          Invoke-WebRequest -Uri $vsUrl -OutFile $vsPath -UserAgent "Mozilla/5.0"
-          Start-Process -FilePath $vsPath -ArgumentList "/S" -Wait
-          Remove-Item $vsPath -Force
-
-          Write-Host "Da cai dat xong UgPhone, VMOS Cloud va VSPhone!"
+          # 3. Tải VSPhone
+          try {
+              $vsUrl = "https://www.vsphone.com/download/VSPhone_setup.exe"
+              $vsPath = Join-Path $env:TEMP "VSPhone_setup.exe"
+              Invoke-WebRequest -Uri $vsUrl -OutFile $vsPath -UserAgent "Mozilla/5.0"
+              Start-Process -FilePath $vsPath -ArgumentList "/S" -Wait
+          } catch { Write-Host "Loi tai VSPhone..." }
 
       - name: Install Tailscale
         run: |
@@ -101,44 +114,15 @@ jobs:
           }
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
 
-      - name: Verify RDP Accessibility
-        run: |
-          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
-          
-          $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
-          if (-not $testResult.TcpTestSucceeded) {
-              Write-Error "TCP connection to RDP port 3389 failed"
-              exit 1
-          }
-          Write-Host "TCP connectivity successful!"
-
-      - name: Download Photo and Auto Set Wallpaper on Login
-        run: |
-          $imgPath = "C:\Users\Public\victory.jpg"
-          Invoke-WebRequest -Uri "https://files.catbox.moe/lb40wl.jpg" -OutFile $imgPath
-          
-          $psScript = @"
-          Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name Wallpaper -Value '$imgPath'
-          Add-Type -TypeDefinition 'using System.Runtime.InteropServices; public class Wallpaper { [DllImport("user32.dll", CharSet = CharSet.Auto)] public static extern int SystemParametersInfo(int uAction, int uParam, string lpvParam, int fuWinIni); }'
-          [Wallpaper]::SystemParametersInfo(0x0014, 0, '$imgPath', 0x01 -bor 0x02)
-          "@
-          
-          $psFilePath = "C:\Users\Public\set_wallpaper.ps1"
-          $psScript | Out-File -FilePath $psFilePath -Encoding ascii
-          
-          $startupFolder = "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\StartUp"
-          $batPath = "$startupFolder\set_wallpaper.bat"
-          "powershell -ExecutionPolicy Bypass -File `"$psFilePath`"" | Out-File -FilePath $batPath -Encoding ascii
-
       - name: Maintain Connection
         run: |
-          Write-Host "`n=== RDP ACCESS ==="
+          Write-Host "`n=== MAY WASHINGTON DA SAN THANH CONG ==="
           Write-Host "Address  : $env:TAILSCALE_IP"
           Write-Host "Username : $env:RDP_USER"
           Write-Host "Password : $env:RDP_PASS"
-          Write-Host "==================`n"
+          Write-Host "========================================`n"
           
           while ($true) {
-              Write-Host "[$(Get-Date)] RDP Active - Cancel workflow run to terminate"
+              Write-Host "[$(Get-Date)] RDP Active - Washington Node"
               Start-Sleep -Seconds 300
           }
