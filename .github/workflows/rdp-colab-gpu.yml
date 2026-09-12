@@ -1,4 +1,4 @@
-name: nhat
+name: nhat1
 
 on:
   workflow_dispatch:
@@ -9,6 +9,15 @@ jobs:
     timeout-minutes: 360
 
     steps:
+      - name: Check Location Washington First
+        run: |
+          $loc = (curl.exe -s https://ipinfo.io/json | ConvertFrom-Json)
+          Write-Host "Khu vuc hien tai: $($loc.city), $($loc.region) - $($loc.country)"
+          if ($loc.region -ne "Washington") {
+              Write-Error "Khong phai may o Washington! Huy ngay de tiet kiem Key Tailscale..."
+              exit 1
+          }
+
       - name: Configure Core RDP Settings
         run: |
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
@@ -33,6 +42,36 @@ jobs:
           
           echo "RDP_USER=$username" >> $env:GITHUB_ENV
           echo "RDP_PASS=$password" >> $env:GITHUB_ENV
+
+      - name: Download and Install UgPhone, VMOS Cloud, and VSPhone
+        run: |
+          $desktop = "C:\Users\Public\Desktop"
+
+          # 1. Tải và cài đặt UgPhone
+          Write-Host "Dang tai UgPhone..."
+          $ugUrl = "https://download.ugphone.com/UgPhone_setup.exe"
+          $ugPath = Join-Path $env:TEMP "UgPhone_setup.exe"
+          Invoke-WebRequest -Uri $ugUrl -OutFile $ugPath -UserAgent "Mozilla/5.0"
+          Start-Process -FilePath $ugPath -ArgumentList "/S" -Wait
+          Remove-Item $ugPath -Force
+
+          # 2. Tải và cài đặt VMOS Cloud
+          Write-Host "Dang tai VMOS Cloud..."
+          $vmosUrl = "https://www.vmos.com/download/VMOSCloud_setup.exe"
+          $vmosPath = Join-Path $env:TEMP "VMOSCloud_setup.exe"
+          Invoke-WebRequest -Uri $vmosUrl -OutFile $vmosPath -UserAgent "Mozilla/5.0"
+          Start-Process -FilePath $vmosPath -ArgumentList "/S" -Wait
+          Remove-Item $vmosPath -Force
+
+          # 3. Tải và cài đặt VSPhone
+          Write-Host "Dang tai VSPhone..."
+          $vsUrl = "https://download.vsphone.com/VSPhone_setup.exe"
+          $vsPath = Join-Path $env:TEMP "VSPhone_setup.exe"
+          Invoke-WebRequest -Uri $vsUrl -OutFile $vsPath -UserAgent "Mozilla/5.0"
+          Start-Process -FilePath $vsPath -ArgumentList "/S" -Wait
+          Remove-Item $vsPath -Force
+
+          Write-Host "Da cai dat xong UgPhone, VMOS Cloud va VSPhone!"
 
       - name: Install Tailscale
         run: |
@@ -75,11 +114,9 @@ jobs:
 
       - name: Download Photo and Auto Set Wallpaper on Login
         run: |
-          # 1. Tải ảnh về thư mục Public
           $imgPath = "C:\Users\Public\victory.jpg"
           Invoke-WebRequest -Uri "https://files.catbox.moe/lb40wl.jpg" -OutFile $imgPath
           
-          # 2. Tạo script PowerShell đổi wallpaper
           $psScript = @"
           Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name Wallpaper -Value '$imgPath'
           Add-Type -TypeDefinition 'using System.Runtime.InteropServices; public class Wallpaper { [DllImport("user32.dll", CharSet = CharSet.Auto)] public static extern int SystemParametersInfo(int uAction, int uParam, string lpvParam, int fuWinIni); }'
@@ -89,7 +126,6 @@ jobs:
           $psFilePath = "C:\Users\Public\set_wallpaper.ps1"
           $psScript | Out-File -FilePath $psFilePath -Encoding ascii
           
-          # 3. Tạo file tự chạy trong Startup dùng chung cho mọi User
           $startupFolder = "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\StartUp"
           $batPath = "$startupFolder\set_wallpaper.bat"
           "powershell -ExecutionPolicy Bypass -File `"$psFilePath`"" | Out-File -FilePath $batPath -Encoding ascii
