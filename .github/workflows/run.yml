@@ -1,0 +1,181 @@
+name: nhat 1
+
+on:
+  workflow_dispatch:
+
+jobs:
+  secure-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Configure Core RDP Settings
+        run: |
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
+
+          netsh advfirewall firewall delete rule name="RDP-Tailscale"
+          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
+
+          Restart-Service -Name TermService -Force
+
+      - name: Create RDP User with Custom Password
+        run: |
+          $username = "nhat"
+          $password = "Pzkxvu123@"
+          
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          
+          New-LocalUser -Name $username -Password $securePass -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member $username
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username
+          
+          echo "RDP_USER=$username" >> $env:GITHUB_ENV
+          echo "RDP_PASS=$password" >> $env:GITHUB_ENV
+
+      - name: Install Tailscale
+        run: |
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $installerPath = Join-Path $env:TEMP "tailscale.msi"
+          
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
+          Remove-Item $installerPath -Force
+
+      - name: Establish Tailscale Connection
+        run: |
+          $tsExe = Join-Path $env:ProgramFiles "Tailscale\tailscale.exe"
+          & $tsExe up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
+          
+          $tsIP = $null
+          $retries = 0
+          while (-not $tsIP -and $retries -lt 10) {
+              $tsIP = & $tsExe ip -4
+              Start-Sleep -Seconds 5
+              $retries++
+          }
+          
+          if (-not $tsIP) {
+              Write-Error "Tailscale IP not assigned. Exiting."
+              exit 1
+          }
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+
+      - name: Verify RDP Accessibility
+        run: |
+          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
+          
+          $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
+          if (-not $testResult.TcpTestSucceeded) {
+              Write-Error "TCP connection to RDP port 3389 failed"
+              exit 1
+          }
+          Write-Host "TCP connectivity successful!"
+
+      - name: Setup Auto-run Python Script on Login
+        run: |
+          choco install python3 --no-progress -y
+          $env:Path += ";C:\Python312;C:\Python312\Scripts"
+          python -m pip install --upgrade pip
+          pip install playwright requests faker
+          python -m playwright install chromium
+
+          $pyScript = @'
+import time
+import random
+import string
+import requests
+from faker import Faker
+from playwright.sync_api import sync_playwright
+
+fake = Faker('vi_VN')
+API_OTPMAIL = "${{ secrets.OTPMAIL_API_KEY }}"
+
+def get_temp_email():
+    res = requests.get(f"https://otpmail.vn/api/v1/get-mail?api_key={API_OTPMAIL}").json()
+    return res.get("email"), res.get("id")
+
+def get_otp_code(mail_id):
+    for _ in range(20):
+        time.sleep(5)
+        res = requests.get(f"https://otpmail.vn/api/v1/get-code?api_key={API_OTPMAIL}&id={mail_id}").json()
+        if res.get("code"):
+            return res.get("code")
+    return None
+
+def generate_random_password(length=12):
+    chars = string.ascii_letters + string.digits + "!@#$%^&*"
+    return ''.join(random.choice(chars) for _ in range(length))
+
+def register_facebook():
+    email, mail_id = get_temp_email()
+    
+    first_name = fake.first_name()
+    last_name = fake.last_name()
+    password = generate_random_password()
+    
+    rand_day = str(random.randint(1, 28))
+    rand_month = str(random.randint(1, 12))
+    rand_year = str(random.randint(1985, 2008))
+    rand_gender = str(random.choice([1, 2]))
+
+    print(f"--- DỮ LIỆU TẠO TÀI KHOẢN ---")
+    print(f"Họ tên: {last_name} {first_name}")
+    print(f"Email: {email}")
+    print(f"Password: {password}")
+    print(f"Ngày sinh: {rand_day}/{rand_month}/{rand_year}")
+    print("------------------------------")
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=False)
+        page = browser.new_page()
+        page.goto("https://www.facebook.com/r.php")
+
+        page.fill("input[name='firstname']", first_name)
+        page.fill("input[name='lastname']", last_name)
+        page.fill("input[name='reg_email__']", email)
+        page.fill("input[name='reg_email_confirmation__']", email)
+        page.fill("input[name='reg_passwd__']", password)
+
+        page.select_option("select[name='birthday_day']", rand_day)
+        page.select_option("select[name='birthday_month']", rand_month)
+        page.select_option("select[name='birthday_year']", rand_year)
+        page.check(f"input[value='{rand_gender}']")
+
+        page.click("button[name='websubmit']")
+        
+        print("Đang chờ OTP từ otpmail.vn...")
+        otp = get_otp_code(mail_id)
+        if otp:
+            print(f"Nhập mã OTP thành công: {otp}")
+            page.fill("input[name='code']", otp)
+            page.click("button[type='submit']")
+        else:
+            print("Không nhận được OTP.")
+        
+        time.sleep(10)
+
+if __name__ == "__main__":
+    register_facebook()
+'@
+          $pyFilePath = "C:\Users\Public\autofb.py"
+          [System.IO.File]::WriteAllText($pyFilePath, $pyScript)
+
+          $startupFolder = "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\StartUp"
+          $batPath = Join-Path $startupFolder "start_autofb.bat"
+          $batContent = 'python "C:\Users\Public\autofb.py"'
+          [System.IO.File]::WriteAllText($batPath, $batContent)
+
+      - name: Maintain Connection
+        run: |
+          Write-Host "`n=== RDP ACCESS ==="
+          Write-Host "Address  : $env:TAILSCALE_IP"
+          Write-Host "Username : $env:RDP_USER"
+          Write-Host "Password : $env:RDP_PASS"
+          Write-Host "==================`n"
+          
+          while ($true) {
+              Write-Host "[$(Get-Date)] RDP Active - Cancel workflow run to terminate"
+              Start-Sleep -Seconds 300
+          }
