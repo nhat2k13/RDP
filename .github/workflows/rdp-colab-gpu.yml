@@ -1,4 +1,4 @@
-name: nhat1
+name: nhat
 
 on:
   workflow_dispatch:
