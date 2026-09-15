@@ -1,4 +1,4 @@
-name: nhat2
+name: cloud
 
 on:
   workflow_dispatch:
@@ -9,10 +9,18 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - name: Check Location Info
+      - name: Check Fast Region First (Washington, California, Oregon, Texas)
         run: |
           $loc = (curl.exe -s https://ipinfo.io/json | ConvertFrom-Json)
           Write-Host "Khu vuc hien tai: $($loc.city), $($loc.region) - $($loc.country)"
+          
+          $allowedRegions = @("Washington", "California", "Oregon", "Texas")
+          
+          if ($allowedRegions -notcontains $loc.region) {
+              Write-Error "Khu vuc $($loc.region) khong nam trong danh sach toi uu! Huy de thu lai..."
+              exit 1
+          }
+          Write-Host "Tim thay khu vuc toi uu: $($loc.region)! Tiep tuc cai dat RDP..."
 
       - name: Configure Core RDP Settings
         run: |
@@ -25,19 +33,59 @@ jobs:
 
           Restart-Service -Name TermService -Force
 
-      - name: Create RDP User with Custom Password
+      - name: Create RDP User with Custom Avatar
         run: |
           $username = "nhat"
           $password = "Pzkxvu123@"
+          $avatarUrl = "https://files.catbox.moe/xdfjyv.jpg"
           
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-          
           New-LocalUser -Name $username -Password $securePass -AccountNeverExpires
           Add-LocalGroupMember -Group "Administrators" -Member $username
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username
           
           echo "RDP_USER=$username" >> $env:GITHUB_ENV
           echo "RDP_PASS=$password" >> $env:GITHUB_ENV
+
+          $publicDir = "C:\Users\Public"
+          $rawAvatar = Join-Path $publicDir "raw_avatar.jpg"
+          
+          try {
+              $webClient = New-Object System.Net.WebClient
+              $webClient.DownloadFile($avatarUrl, $rawAvatar)
+              
+              $accountPicDir = "C:\ProgramData\Microsoft\User Account Pictures"
+              if (!(Test-Path $accountPicDir)) {
+                  New-Item -Path $accountPicDir -ItemType Directory -Force | Out-Null
+              }
+              
+              Add-Type -AssemblyName System.Drawing
+              $img = [System.Drawing.Image]::FromFile($rawAvatar)
+              
+              $users = Get-WmiObject -Class Win32_UserAccount | Where-Object {$_.Name -eq $username}
+              if ($users) {
+                  $sid = $users.SID
+                  $regPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AccountPicture\Users\$sid"
+                  if (!(Test-Path $regPath)) {
+                      New-Item -Path $regPath -Force | Out-Null
+                  }
+                  
+                  foreach ($size in @(32, 40, 48, 64, 96, 192, 200, 240)) {
+                      $sizedPath = Join-Path $accountPicDir "$($username)_$($size).jpg"
+                      $imgResized = [System.Drawing.Image]::FromFile($rawAvatar)
+                      $thumb = $imgResized.GetThumbnailImage($size, $size, $null, [System.IntPtr]::Zero)
+                      $thumb.Save($sizedPath, [System.Drawing.Imaging.ImageFormat]::Jpeg)
+                      $thumb.Dispose()
+                      $imgResized.Dispose()
+
+                      New-ItemProperty -Path $regPath -Name "Image$($size)" -Value $sizedPath -PropertyType String -Force | Out-Null
+                  }
+              }
+              $img.Dispose()
+              Write-Host "Da cai dat anh dai dien thanh cong cho man hinh dang nhap!"
+          } catch {
+              Write-Warning "Loi khi tao anh dai dien: $_"
+          }
 
       - name: Install Tailscale
         run: |
