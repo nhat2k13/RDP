@@ -22,8 +22,14 @@ jobs:
 
           # 3. Cài đặt XFCE4, XRDP, Steam và thư viện đồ họa
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            xfce4 xfce4-goodies xrdp dbus-x11 x11-xserver-utils mesa-utils \
+            xfce4 xfce4-goodies xrdp dbus-x11 x11-xserver-utils mesa-utils wget \
             steam libgl1-mesa-dri:i386 libgl1-mesa-glx:i386
+
+      - name: Install Google Chrome
+        run: |
+          wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+          sudo apt-get install -y ./google-chrome-stable_current_amd64.deb
+          rm google-chrome-stable_current_amd64.deb
 
       - name: Fix NVIDIA Driver Mismatch
         run: |
@@ -47,7 +53,12 @@ jobs:
           echo "export __GLX_VENDOR_LIBRARY_NAME=nvidia" >> /home/nhat/.bashrc
           echo "export __NV_PRIME_RENDER_OFFLOAD=1" >> /home/nhat/.profile
           echo "export __GLX_VENDOR_LIBRARY_NAME=nvidia" >> /home/nhat/.profile
-          
+
+          # Tạo biểu tượng Google Chrome ra Desktop
+          mkdir -p /home/nhat/Desktop
+          cp /usr/share/applications/google-chrome.desktop /home/nhat/Desktop/
+          chmod +x /home/nhat/Desktop/google-chrome.desktop
+
           # Cấp quyền hoàn toàn cho thư mục home của nhat
           sudo chown -R nhat:nhat /home/nhat
           sudo chmod +x /home/nhat/.xsession
