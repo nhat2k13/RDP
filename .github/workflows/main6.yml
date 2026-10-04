@@ -23,9 +23,9 @@ jobs:
           # 3. Cài đặt Tailscale
           curl -fsSL https://tailscale.com/install.sh | sh
           
-          # 4. Cài đặt XFCE4, XRDP & wget
+          # 4. Cài đặt XFCE4, XRDP, DBUS & wget
           sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y xfce4 xfce4-goodies xrdp tzdata wget
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y xfce4 xfce4-goodies xrdp dbus-x11 tzdata wget
 
       - name: Install Google Chrome
         run: |
@@ -42,7 +42,8 @@ jobs:
           echo "$USERNAME:$Password" | sudo chpasswd
           sudo usermod -aG sudo $USERNAME
           
-          echo "startxfce4" | sudo tee /home/$USERNAME/.xsession
+          # Cấu hình xsession khởi chạy cùng dbus-launch
+          echo "dbus-launch --exit-with-session startxfce4" | sudo tee /home/$USERNAME/.xsession
           sudo chown $USERNAME:$USERNAME /home/$USERNAME/.xsession
           
           # Tạo biểu tượng Google Chrome ngoài Desktop cho user RDP
@@ -52,7 +53,7 @@ jobs:
           sudo chown -R $USERNAME:$USERNAME /home/$USERNAME/Desktop
           
           sudo xrdp-sesman &
-          sudo xrdp &
+          sudo service xrdp restart
 
       - name: Connect to Tailscale
         run: |
