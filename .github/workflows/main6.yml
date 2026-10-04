@@ -23,9 +23,15 @@ jobs:
           # 3. Cài đặt Tailscale
           curl -fsSL https://tailscale.com/install.sh | sh
           
-          # 4. Cài đặt XFCE4 & XRDP
+          # 4. Cài đặt XFCE4, XRDP & wget
           sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y xfce4 xfce4-goodies xrdp tzdata
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y xfce4 xfce4-goodies xrdp tzdata wget
+
+      - name: Install Google Chrome
+        run: |
+          wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+          sudo apt-get install -y ./google-chrome-stable_current_amd64.deb
+          rm google-chrome-stable_current_amd64.deb
 
       - name: Create RDP User
         run: |
@@ -38,6 +44,12 @@ jobs:
           
           echo "startxfce4" | sudo tee /home/$USERNAME/.xsession
           sudo chown $USERNAME:$USERNAME /home/$USERNAME/.xsession
+          
+          # Tạo biểu tượng Google Chrome ngoài Desktop cho user RDP
+          sudo mkdir -p /home/$USERNAME/Desktop
+          sudo cp /usr/share/applications/google-chrome.desktop /home/$USERNAME/Desktop/ 2>/dev/null || true
+          sudo chmod +x /home/$USERNAME/Desktop/google-chrome.desktop 2>/dev/null || true
+          sudo chown -R $USERNAME:$USERNAME /home/$USERNAME/Desktop
           
           sudo xrdp-sesman &
           sudo xrdp &
